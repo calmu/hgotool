@@ -11,7 +11,9 @@ import (
 
 // zapLogger 是基于zap的HLogger接口实现
 type zapLogger struct {
-	logger *zap.Logger
+	logger       *zap.Logger
+	config       *LoggerConfig
+	rotateConfig *RotateConfig
 }
 
 // Warn 实现Warn方法
@@ -167,6 +169,7 @@ func NewZapLogger(config LoggerConfig) (HLogger, error) {
 
 	return &zapLogger{
 		logger: loggerInstance,
+		config: &config,
 	}, nil
 }
 
@@ -261,7 +264,8 @@ func NewRotatingLogger(rotateConfig RotateConfig) (HLogger, error) {
 	loggerInstance := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
 
 	return &zapLogger{
-		logger: loggerInstance,
+		logger:       loggerInstance,
+		rotateConfig: &rotateConfig,
 	}, nil
 }
 
