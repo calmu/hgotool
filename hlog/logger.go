@@ -60,6 +60,11 @@ type EncoderConfig struct {
 	EncodeDuration string // 持续时间编码方式: "seconds", "nanos", "string"
 	EncodeCaller   string // 调用者编码方式: "full", "short"
 	TimeLayout     string // 自定义时间格式布局，例如 "2006-01-02 15:04:05"
+	// 隐藏字段选项 - 如果设置为true，则在输出中隐藏相应字段
+	HideCaller bool // 是否隐藏调用者信息
+	HideLevel  bool // 是否隐藏日志级别
+	HideTime   bool // 是否隐藏时间戳
+	HideName   bool // 是否隐藏名称字段
 }
 
 // LoggerConfig 日志配置结构
@@ -321,6 +326,20 @@ func getEncoderConfig(config *EncoderConfig, encoderType string) zapcore.Encoder
 	}
 	if config.LineEnding != "" {
 		encoderConfig.LineEnding = config.LineEnding
+	}
+
+	// 根据隐藏字段配置设置相应键为空字符串
+	if config.HideTime {
+		encoderConfig.TimeKey = ""
+	}
+	if config.HideLevel {
+		encoderConfig.LevelKey = ""
+	}
+	if config.HideName {
+		encoderConfig.NameKey = ""
+	}
+	if config.HideCaller {
+		encoderConfig.CallerKey = ""
 	}
 
 	// 设置时间编码格式
