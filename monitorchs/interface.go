@@ -8,10 +8,14 @@
 // --------------------------------------------
 package monitorchs
 
-import "sync"
+import (
+	"go.uber.org/zap"
+	"sync"
+)
 
 // MonitorChsInterface 定义监控通道接口
 type MonitorChsInterface interface {
 	Run(wg *sync.WaitGroup)
 	Stop()
+	GetMonitorLog() []zap.Field
 }

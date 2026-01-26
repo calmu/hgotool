@@ -41,6 +41,7 @@ func TestMonitorChs(t *testing.T) {
 		MaxBackups:   3,       // 保留3个备份
 		MaxAge:       7,       // 保留7天
 	})
+	defer hlog.Close()
 
 	m := NewMonitorChs(WithChs("test", chs), WithDuration[string](time.Second*5))
 
@@ -81,6 +82,7 @@ func TestMonitorChsInt(t *testing.T) {
 		MaxBackups:   3,       // 保留3个备份
 		MaxAge:       7,       // 保留7天
 	})
+	defer hlog.Close()
 
 	m := NewMonitorChs(WithChs("intTest", chs), WithDuration[int](time.Second*3))
 
@@ -123,6 +125,7 @@ func TestMonitorChsMultipleTypes(t *testing.T) {
 		MaxBackups:   3,       // 保留3个备份
 		MaxAge:       7,       // 保留7天
 	})
+	defer hlog.Close()
 
 	// 创建两个监控器，分别监控不同类型的通道
 	stringMonitor := NewMonitorChs(WithChs("string", stringChs), WithDuration[string](time.Second*5))

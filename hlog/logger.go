@@ -100,6 +100,13 @@ var (
 	loggersMutex  sync.RWMutex
 )
 
+// Close 关闭所有全局logger
+func Close() {
+	for _, logger := range GlobalLoggers {
+		logger.Close()
+	}
+}
+
 // GetLogger 获取指定类型的全局logger实例
 func GetLogger(loggerType string) HLogger {
 	loggersMutex.RLock()
@@ -169,6 +176,9 @@ func NewZapLogger(config LoggerConfig) (HLogger, error) {
 
 	writeSyncer := zapcore.NewMultiWriteSyncer(getWriteSyncers(config.OutputPath)...)
 	core := zapcore.NewCore(encoder, writeSyncer, level)
+
+	// 后续可以添加更多功能，如添加字段、添加堆栈跟踪等
+	//core = core.With([]zapcore.Field{})
 
 	loggerInstance := zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
 

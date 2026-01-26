@@ -18,6 +18,7 @@ import (
 
 const (
 	MonitorDuration time.Duration = time.Minute
+	ModBase                       = "base" // base模式，此时不再赋值默认值
 )
 
 type Options[T any] func(m *MonitorChs[T])
@@ -27,6 +28,7 @@ type MonitorChs[T any] struct {
 	quitCh          chan struct{}
 	monitorDuration time.Duration
 	hLog            hlog.HLoggerBase
+	mod             string
 }
 
 // NewMonitorChs
@@ -50,6 +52,9 @@ func NewMonitorChs[T any](options ...Options[T]) *MonitorChs[T] {
 		option(m)
 	}
 
+	if m.mod == ModBase {
+		return m
+	}
 	// 确保在所有选项应用后仍有默认值
 	if m.hLog == nil {
 		m.hLog = hlog.GlobalLoggers["default"]
@@ -100,6 +105,12 @@ func WithHLog[T any]() Options[T] {
 	}
 }
 
+func WithModBase[T any]() Options[T] {
+	return func(m *MonitorChs[T]) {
+		m.mod = ModBase
+	}
+}
+
 func (m *MonitorChs[T]) Run(wg *sync.WaitGroup) {
 	m.quitCh = make(chan struct{}, 1)
 	ticker := time.NewTicker(m.monitorDuration)
@@ -108,25 +119,10 @@ func (m *MonitorChs[T]) Run(wg *sync.WaitGroup) {
 		for {
 			select {
 			case <-ticker.C:
-				if m.chs == nil {
-					continue
-				}
-				ll := 0
-				for _, chs := range m.chs {
-					ll += len(chs)
-				}
-				if ll == 0 {
-					continue
-				}
-				fields := make([]zap.Field, 0, ll)
-				for name, chs := range m.chs {
-					for i, ch := range chs {
-						fields = append(fields, zap.Any(fmt.Sprintf("%sch%v len", name, i), len(ch)))
-					}
-				}
+				fields := m.GetMonitorLog()
 
 				// 确保hLog不为nil
-				if m.hLog != nil {
+				if fields != nil && m.hLog != nil {
 					m.hLog.Warn("ch len monitor", fields...)
 				}
 			case <-m.quitCh:
@@ -145,4 +141,24 @@ func (m *MonitorChs[T]) Stop() {
 			close(m.quitCh)
 		}
 	})
+}
+
+func (m *MonitorChs[T]) GetMonitorLog() []zap.Field {
+	if m.chs == nil {
+		return nil
+	}
+	ll := 0
+	for _, chs := range m.chs {
+		ll += len(chs)
+	}
+	if ll == 0 {
+		return nil
+	}
+	fields := make([]zap.Field, 0, ll)
+	for name, chs := range m.chs {
+		for i, ch := range chs {
+			fields = append(fields, zap.Any(fmt.Sprintf("%sch%v len", name, i), len(ch)))
+		}
+	}
+	return fields
 }
