@@ -52,6 +52,9 @@ func TestMonitorChsGroup(t *testing.T) {
 		MaxSize:      1,       // 1MB后轮转
 		MaxBackups:   3,       // 保留3个备份
 		MaxAge:       7,       // 保留7天
+		EncoderConfig: &hlog.EncoderConfig{
+			EncodeTime: "iso8601",
+		},
 	})
 	defer hlog.Close()
 
@@ -104,6 +107,9 @@ func TestMonitorChsGroupWithStruct(t *testing.T) {
 		MaxSize:      1,       // 1MB后轮转
 		MaxBackups:   3,       // 保留3个备份
 		MaxAge:       7,       // 保留7天
+		EncoderConfig: &hlog.EncoderConfig{
+			EncodeTime: "iso8601",
+		},
 	})
 	defer hlog.Close()
 
