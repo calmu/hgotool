@@ -58,7 +58,7 @@ func NewRotateWriter(config RotateConfig) (*RotateWriter, error) {
 
 	// 只有在时间轮转模式下才设置时间边界
 	if config.TimeRotation != "" {
-		rw.lastRotateTime = rw.getRotationTimeBoundary()
+		rw.lastRotateTime = rw.getRotationTimeBoundary().AddDate(0, 0, -1) // 启动时，默认为昨天
 	} else {
 		// 对于大小轮转，初始化为当前时间，这样就不会触发时间轮转条件
 		rw.lastRotateTime = time.Time{}
