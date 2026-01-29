@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-func TestMonitorChs(t *testing.T) {
+func TestMonitorChs1(t *testing.T) {
 	chs := make([]chan string, 0, 10)
 	for i := 0; i < 10; i++ {
 		chs = append(chs, make(chan string, 100))
@@ -43,8 +43,8 @@ func TestMonitorChs(t *testing.T) {
 	})
 	defer hlog.Close()
 
-	m := NewMonitorChs(WithChs("test", chs), WithDuration[string](time.Second*5))
-
+	m := NewMonitorChs(WithChs("test", chs[:4]), WithDuration[string](time.Second*5))
+	m.AddCh("test5", chs[5])
 	var wg sync.WaitGroup
 	wg.Add(1)
 	m.Run(&wg)

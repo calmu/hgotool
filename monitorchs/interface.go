@@ -17,5 +17,5 @@ import (
 type MonitorChsInterface interface {
 	Run(wg *sync.WaitGroup)
 	Stop()
-	GetMonitorLog() []zap.Field
+	GetMonitorLog() []zap.Field // 允许被获取监控日志；通常是其他组件使用
 }

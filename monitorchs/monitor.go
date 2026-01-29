@@ -29,6 +29,7 @@ type MonitorChs[T any] struct {
 	monitorDuration time.Duration
 	hLog            hlog.HLoggerBase
 	mod             string
+	lock            sync.RWMutex
 }
 
 // NewMonitorChs
@@ -144,6 +145,9 @@ func (m *MonitorChs[T]) Stop() {
 }
 
 func (m *MonitorChs[T]) GetMonitorLog() []zap.Field {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+
 	if m.chs == nil {
 		return nil
 	}
@@ -156,9 +160,43 @@ func (m *MonitorChs[T]) GetMonitorLog() []zap.Field {
 	}
 	fields := make([]zap.Field, 0, ll)
 	for name, chs := range m.chs {
+		l := len(chs)
 		for i, ch := range chs {
-			fields = append(fields, zap.Any(fmt.Sprintf("%sch%v len", name, i), len(ch)))
+			if l == 1 {
+				fields = append(fields, zap.Any(fmt.Sprintf("%sch len", name), len(ch)))
+			} else {
+				fields = append(fields, zap.Any(fmt.Sprintf("%sch%v len", name, i), len(ch)))
+			}
 		}
 	}
 	return fields
+}
+
+// AddCh
+//
+//	@Description: 添加一个ch,注意，name的唯一性
+//	@receiver: m *MonitorChs[T]
+//	@receiver m
+//	@param name string
+//	@param ch chan T
+//
+// ----------------develop info----------------
+//
+//	@Author:		Calmu
+//	@DateTime:		2026-01-29 16:37:25
+//
+// --------------------------------------------
+func (m *MonitorChs[T]) AddCh(name string, ch chan T) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	if m.chs == nil {
+		m.chs = make(map[string][]chan T)
+	}
+	if m.chs[name] == nil {
+		m.chs[name] = make([]chan T, 0, 1)
+		m.chs[name] = append(m.chs[name], ch)
+	} else {
+		m.chs[name][0] = ch
+	}
 }
