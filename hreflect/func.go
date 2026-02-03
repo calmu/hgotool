@@ -28,17 +28,268 @@ import (
 //
 // --------------------------------------------
 func EmbedCopy(dst, src interface{}) {
-	dv := reflect.ValueOf(dst).Elem()
-	sv := reflect.Indirect(reflect.ValueOf(src))
+	// 获取源和目标的反射值
+	srcValue := reflect.ValueOf(src)
+	dstValue := reflect.ValueOf(dst)
 
-	for i := 0; i < sv.NumField(); i++ {
-		sf := sv.Type().Field(i)
-		// 找 dst 里同名字段
-		if df := dv.FieldByName(sf.Name); df.IsValid() && df.CanSet() {
-			if df.Type() == sf.Type {
-				df.Set(sv.Field(i))
+	// 如果任一值不可寻址或者不是指针，返回
+	if !dstValue.IsValid() || dstValue.Kind() != reflect.Ptr {
+		return
+	}
+
+	// 解引用指针获取实际的值
+	dstValue = dstValue.Elem()
+	if !srcValue.IsValid() {
+		return
+	}
+
+	// 如果源是指针，解引用它
+	if srcValue.Kind() == reflect.Ptr {
+		srcValue = srcValue.Elem()
+	}
+
+	// 确保目标是可设置的
+	if !dstValue.CanSet() {
+		return
+	}
+
+	// 逐个字段进行复制
+	copyFieldsByName(dstValue, srcValue)
+}
+
+// copyFieldsByName 按字段名复制两个结构体之间的字段
+func copyFieldsByName(dstValue, srcValue reflect.Value) {
+	if dstValue.Kind() != reflect.Struct || srcValue.Kind() != reflect.Struct {
+		return
+	}
+
+	dstType := dstValue.Type()
+
+	// 遍历目标结构体的所有可导出字段
+	for i := 0; i < dstValue.NumField(); i++ {
+		dstField := dstValue.Field(i)
+		dstFieldType := dstType.Field(i)
+
+		// 跳过非导出字段
+		if !dstField.CanSet() {
+			continue
+		}
+
+		if dstFieldType.Anonymous {
+			// 对于嵌入字段，递归处理其内部字段
+			copyFieldsByName(dstField, srcValue)
+		} else {
+			// 尝试从源结构体中获取同名字段
+			srcField := srcValue.FieldByName(dstFieldType.Name)
+			if !srcField.IsValid() {
+				// 如果直接没有找到同名字段，尝试在嵌入字段中查找
+				srcField = findFieldRecursively(srcValue, dstFieldType.Name, dstField.Type())
+			}
+
+			if srcField.IsValid() && srcField.Type() == dstField.Type() && dstField.CanSet() {
+				dstField.Set(srcField)
 			}
 		}
+	}
+}
+
+// findFieldRecursively 递归查找字段
+func findFieldRecursively(value reflect.Value, fieldName string, fieldType reflect.Type) reflect.Value {
+	if value.Kind() != reflect.Struct {
+		return reflect.Value{}
+	}
+
+	// 直接查找
+	field := value.FieldByName(fieldName)
+	if field.IsValid() && field.Type() == fieldType {
+		return field
+	}
+
+	// 在嵌入字段中查找
+	for i := 0; i < value.NumField(); i++ {
+		subField := value.Field(i)
+		subFieldType := value.Type().Field(i)
+
+		// 只在嵌入字段中递归查找
+		if subFieldType.Anonymous && subField.Kind() == reflect.Struct {
+			result := findFieldRecursively(subField, fieldName, fieldType)
+			if result.IsValid() {
+				return result
+			}
+		}
+	}
+
+	return reflect.Value{}
+}
+
+// copyStructFields 复制结构体字段
+func copyStructFields(dstValue, srcValue reflect.Value) {
+	if dstValue.Kind() != reflect.Struct || srcValue.Kind() != reflect.Struct {
+		return
+	}
+
+	dstType := dstValue.Type()
+
+	// 遍历目标结构体的所有字段
+	for i := 0; i < dstValue.NumField(); i++ {
+		dstField := dstValue.Field(i)
+		dstFieldType := dstType.Field(i)
+
+		// 跳过不可设置的字段
+		if !dstField.CanSet() {
+			continue
+		}
+
+		// 如果是嵌入字段，递归处理
+		if dstFieldType.Anonymous {
+			copyStructFields(dstField, findSrcEmbeddedField(srcValue, dstField.Type()))
+		} else {
+			// 查找源结构体中对应的字段
+			srcFieldName := dstFieldType.Name
+			srcField := srcValue.FieldByName(srcFieldName)
+
+			if srcField.IsValid() && isAssignable(srcField.Type(), dstField.Type()) {
+				if dstField.CanSet() {
+					// 确保类型兼容后再进行赋值
+					if srcField.Type() == dstField.Type() {
+						dstField.Set(srcField)
+					} else {
+						// 如果类型不同但兼容，需要特殊处理
+						setField(dstField, srcField)
+					}
+				}
+			} else {
+				// 如果直接字段不存在或类型不匹配，尝试更深入的查找
+				// 搜索源结构体中是否有嵌入字段包含所需字段
+				foundField := findFieldInEmbeddedStructs(srcValue, dstFieldType.Name, dstField.Type())
+				if foundField.IsValid() && isAssignable(foundField.Type(), dstField.Type()) {
+					if dstField.CanSet() {
+						if foundField.Type() == dstField.Type() {
+							dstField.Set(foundField)
+						} else {
+							setField(dstField, foundField)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// findSrcEmbeddedField 在源结构体中查找指定类型的嵌入字段
+func findSrcEmbeddedField(srcValue reflect.Value, targetType reflect.Type) reflect.Value {
+	if srcValue.Kind() != reflect.Struct {
+		return reflect.Value{}
+	}
+
+	// 首先检查顶层字段是否匹配
+	for i := 0; i < srcValue.NumField(); i++ {
+		srcField := srcValue.Field(i)
+		srcFieldType := srcValue.Type().Field(i)
+
+		// 如果字段类型匹配，直接返回
+		if srcField.Type() == targetType {
+			return srcField
+		}
+
+		// 如果是嵌入字段，递归搜索
+		if srcFieldType.Anonymous { // 是嵌入字段
+			if srcField.Type() == targetType {
+				return srcField
+			}
+			// 递归搜索嵌套的嵌入字段
+			result := findSrcEmbeddedField(srcField, targetType)
+			if result.IsValid() {
+				return result
+			}
+		}
+	}
+
+	return reflect.Value{}
+}
+
+// findFieldInEmbeddedStructs 在嵌入结构体中查找指定名称和类型的字段
+func findFieldInEmbeddedStructs(srcValue reflect.Value, fieldName string, fieldType reflect.Type) reflect.Value {
+	if srcValue.Kind() != reflect.Struct {
+		return reflect.Value{}
+	}
+
+	// 检查当前层级是否包含该字段
+	srcField := srcValue.FieldByName(fieldName)
+	if srcField.IsValid() && srcField.Type() == fieldType {
+		return srcField
+	}
+
+	// 递归搜索嵌入字段
+	for i := 0; i < srcValue.NumField(); i++ {
+		srcField := srcValue.Field(i)
+		srcFieldType := srcValue.Type().Field(i)
+
+		// 如果是嵌入字段，递归搜索
+		if srcFieldType.Anonymous {
+			result := findFieldInEmbeddedStructs(srcField, fieldName, fieldType)
+			if result.IsValid() {
+				return result
+			}
+		}
+	}
+
+	return reflect.Value{}
+}
+
+// isAssignable 检查源类型是否可分配给目标类型
+func isAssignable(srcType, dstType reflect.Type) bool {
+	// 基本类型相同则可分配
+	if srcType == dstType {
+		return true
+	}
+	// 检查是否为基本数据类型且可以转换
+	switch srcType.Kind() {
+	case reflect.String, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64, reflect.Bool:
+		return srcType.Kind() == dstType.Kind()
+	}
+	return false
+}
+
+// setField 设置字段值，处理类型转换
+func setField(dstField, srcField reflect.Value) {
+	if !srcField.CanInterface() || !dstField.CanSet() {
+		return
+	}
+
+	// 如果类型完全一致，则直接设置
+	if srcField.Type() == dstField.Type() {
+		dstField.Set(srcField)
+		return
+	}
+
+	// 按类型进行转换和设置
+	switch srcField.Kind() {
+	case reflect.String:
+		if dstField.Kind() == reflect.String {
+			dstField.SetString(srcField.String())
+		}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if dstField.Kind() == reflect.Int || dstField.Kind() == reflect.Int64 {
+			dstField.SetInt(srcField.Int())
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if dstField.Kind() == reflect.Uint || dstField.Kind() == reflect.Uint64 {
+			dstField.SetUint(srcField.Uint())
+		}
+	case reflect.Float32, reflect.Float64:
+		if dstField.Kind() == reflect.Float64 || dstField.Kind() == reflect.Float32 {
+			dstField.SetFloat(srcField.Float())
+		}
+	case reflect.Bool:
+		if dstField.Kind() == reflect.Bool {
+			dstField.SetBool(srcField.Bool())
+		}
+	case reflect.Struct:
+		// 对于结构体，递归复制其字段
+		copyStructFields(dstField, srcField)
 	}
 }
 
