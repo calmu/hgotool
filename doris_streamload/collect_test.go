@@ -3,6 +3,7 @@ package doris_streamload
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 // MockStreamLoadClient 用于测试的模拟客户端
@@ -46,6 +47,10 @@ func TestNewCollect(t *testing.T) {
 
 	if collect.maxBytes != 10*1024*1024 {
 		t.Errorf("Expected default maxBytes to be 10MB, got %d", collect.maxBytes)
+	}
+
+	if err := collect.Close(); err != nil {
+		t.Errorf("Expected close error to be nil, got %v", err)
 	}
 }
 
@@ -92,6 +97,10 @@ func TestCollectWithOptions(t *testing.T) {
 	if callbackErr != nil {
 		t.Errorf("Expected callback error to be nil, got %v", callbackErr)
 	}
+
+	if err = collect.Close(); err != nil {
+		t.Errorf("Expected close error to be nil, got %v", err)
+	}
 }
 
 func TestCollectAddAndLen(t *testing.T) {
@@ -121,6 +130,10 @@ func TestCollectAddAndLen(t *testing.T) {
 			t.Errorf("Expected length to be %d after adding item %d, got %d", expectedLen, i, actualLen)
 		}
 	}
+
+	if err := collect.Close(); err != nil {
+		t.Errorf("Expected close error to be nil, got %v", err)
+	}
 }
 
 func TestCollectSize(t *testing.T) {
@@ -141,6 +154,10 @@ func TestCollectSize(t *testing.T) {
 	sizeAfterAdd := collect.Size()
 	if sizeAfterAdd <= 0 {
 		t.Errorf("Expected size to be greater than 0 after adding data, got %d", sizeAfterAdd)
+	}
+
+	if err = collect.Close(); err != nil {
+		t.Errorf("Expected close error to be nil, got %v", err)
 	}
 }
 
@@ -178,6 +195,10 @@ func TestCollectFlush(t *testing.T) {
 	if collect.Size() != 0 {
 		t.Errorf("Expected size to be 0 after flush, got %d", collect.Size())
 	}
+
+	if err = collect.Close(); err != nil {
+		t.Errorf("Expected close error to be nil, got %v", err)
+	}
 }
 
 func TestCollectClose(t *testing.T) {
@@ -212,6 +233,40 @@ func TestCollectClose(t *testing.T) {
 	}
 }
 
+func TestCollectTicker(t *testing.T) {
+	mockClient := &MockStreamLoadClient{
+		loadFunc: func(data []byte) (*StreamLoadResponse, error) {
+			return &StreamLoadResponse{
+				Status: "Success",
+				Label:  "test_label",
+			}, nil
+		},
+	}
+
+	collect := NewCollect(mockClient, WithAutoFlushInterval(time.Second*5))
+
+	testData := map[string]interface{}{"id": 1, "name": "test"}
+	err := collect.Add(testData)
+	if err != nil {
+		t.Fatalf("Failed to add data: %v", err)
+	}
+
+	if collect.Len() != 1 {
+		t.Errorf("Expected length to be 1 before close, got %d", collect.Len())
+	}
+
+	time.Sleep(time.Second * 6)
+
+	err = collect.Close()
+	if err != nil {
+		t.Fatalf("Failed to close: %v", err)
+	}
+
+	if collect.Len() != 0 {
+		t.Errorf("Expected length to be 0 after close, got %d", collect.Len())
+	}
+}
+
 func TestCollectAddExceedsSizeLimit(t *testing.T) {
 	mockClient := &MockStreamLoadClient{}
 	collect := NewCollect(mockClient, WithMaxSize(2)) // 最大2条
@@ -234,6 +289,10 @@ func TestCollectAddExceedsSizeLimit(t *testing.T) {
 	err := collect.Add(testData[2])
 	if err == nil {
 		t.Error("Expected error when adding data that exceeds size limit, got nil")
+	}
+
+	if err = collect.Close(); err != nil {
+		t.Errorf("Expected close error to be nil, got %v", err)
 	}
 }
 
@@ -269,5 +328,9 @@ func TestCollectWithFailureCallback(t *testing.T) {
 
 	if callbackErr.Error() != expectedError.Error() {
 		t.Errorf("Expected callback error to be '%v', got '%v'", expectedError, callbackErr)
+	}
+
+	if err = collect.Close(); err != nil {
+		t.Errorf("Expected close error to be nil, got %v", err)
 	}
 }
