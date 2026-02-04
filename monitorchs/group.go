@@ -21,6 +21,7 @@ type MonitorChsGroup struct {
 	quitCh          chan struct{}
 	monitorDuration time.Duration
 	hLog            hlog.HLoggerBase
+	once            sync.Once
 }
 
 type OptionsGroup func(*MonitorChsGroup)
@@ -96,10 +97,8 @@ func (g *MonitorChsGroup) Start(wg *sync.WaitGroup) {
 }
 
 func (g *MonitorChsGroup) Stop() {
-	var once sync.Once
-	once.Do(func() {
+	g.once.Do(func() {
 		if g.quitCh != nil {
-			g.quitCh <- struct{}{}
 			close(g.quitCh)
 		}
 	})

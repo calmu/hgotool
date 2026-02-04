@@ -30,6 +30,7 @@ type MonitorChs[T any] struct {
 	hLog            hlog.HLoggerBase
 	mod             string
 	lock            sync.RWMutex
+	once            sync.Once
 }
 
 // NewMonitorChs
@@ -135,10 +136,8 @@ func (m *MonitorChs[T]) Run(wg *sync.WaitGroup) {
 }
 
 func (m *MonitorChs[T]) Stop() {
-	var once sync.Once
-	once.Do(func() {
+	m.once.Do(func() {
 		if m.quitCh != nil {
-			m.quitCh <- struct{}{}
 			close(m.quitCh)
 		}
 	})
