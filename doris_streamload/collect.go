@@ -20,9 +20,9 @@ type Collect struct {
 	mutex        sync.Mutex       // 并发安全锁
 	callback     func(error)      // 回调函数，用于处理发送结果
 	timeout      time.Duration    // 超时时间
-	flushTimer   *time.Timer      // 自动刷新定时器
 	stopChan     chan struct{}    // 停止信号
 	logger       hlog.HLoggerBase // 日志记录器
+	once         sync.Once
 }
 
 // CollectOption 配置Collect选项
@@ -59,10 +59,21 @@ func WithTimeout(timeout time.Duration) CollectOption {
 // WithAutoFlushInterval 设置自动刷新间隔
 func WithAutoFlushInterval(interval time.Duration) CollectOption {
 	return func(c *Collect) {
-		// 启动定时器自动刷新
-		c.flushTimer = time.AfterFunc(interval, func() {
-			_ = c.Flush() // 忽略错误，因为可能在关闭时触发
-		})
+		// 启动周期性定时器自动刷新
+		ticker := time.NewTicker(interval)
+		// 创建一个停止通道
+		go func() {
+			for {
+				select {
+				case <-ticker.C:
+					_ = c.Flush() // 忽略错误，因为可能在关闭时触发
+				case <-c.stopChan:
+					fmt.Println("Collect stopped")
+					ticker.Stop()
+					return
+				}
+			}
+		}()
 	}
 }
 
@@ -170,11 +181,6 @@ func (c *Collect) Flush() error {
 	c.data = c.data[:0]
 	c.currentBytes = 0
 
-	// 重置自动刷新定时器
-	if c.flushTimer != nil {
-		c.flushTimer.Stop()
-	}
-
 	c.mutex.Unlock()
 
 	// 如果没有数据，则直接返回
@@ -198,7 +204,7 @@ func (c *Collect) Flush() error {
 	// 发送到Doris
 	resp, err := c.client.Load(jsonData)
 	if err != nil {
-		c.logger.Error("Failed to load data to Doris", zap.Error(err))
+		c.logger.Error("Failed to load data to Doris", zap.Error(err), zap.String("data", string(jsonData)))
 		if c.callback != nil {
 			c.callback(err)
 		}
@@ -208,7 +214,7 @@ func (c *Collect) Flush() error {
 	// 检查响应状态
 	if resp.Status != "Success" && resp.Status != "" {
 		errMsg := fmt.Sprintf("stream load failed with status: %s, message: %s", resp.Status, resp.Message)
-		c.logger.Warn("Stream load failed", zap.String("status", resp.Status), zap.String("message", resp.Message))
+		c.logger.Warn("Stream load failed", zap.String("status", resp.Status), zap.String("message", resp.Message), zap.String("data", string(jsonData)))
 		if c.callback != nil {
 			c.callback(fmt.Errorf(errMsg))
 		}
@@ -232,12 +238,9 @@ func (c *Collect) Close() error {
 	// 发送剩余数据
 	err := c.Flush()
 
-	// 停止定时器
-	if c.flushTimer != nil {
-		c.flushTimer.Stop()
-	}
-
-	close(c.stopChan)
+	c.once.Do(func() {
+		close(c.stopChan)
+	})
 
 	c.logger.Info("Collect closed successfully")
 	return err
