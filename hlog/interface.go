@@ -19,11 +19,11 @@ import (
 type HLoggerBase interface {
 	Warn(msg string, fields ...zap.Field)
 	Error(msg string, fields ...zap.Field)
+	Info(msg string, fields ...zap.Field)
 }
 
 type HLogger interface {
 	HLoggerBase
-	Info(msg string, fields ...zap.Field)
 	Debug(msg string, fields ...zap.Field)
 	Fatal(msg string, fields ...zap.Field)
 	Close() error
