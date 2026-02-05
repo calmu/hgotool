@@ -19,10 +19,10 @@ type Collect struct {
 	currentBytes int              // 当前大小（字节）
 	mutex        sync.Mutex       // 并发安全锁
 	callback     func(error)      // 回调函数，用于处理发送结果
-	timeout      time.Duration    // 超时时间
 	stopChan     chan struct{}    // 停止信号
 	logger       hlog.HLoggerBase // 日志记录器
 	once         sync.Once
+	lastTime     time.Time // 最后一次刷新时间，避免频繁自动刷新
 }
 
 // CollectOption 配置Collect选项
@@ -49,13 +49,6 @@ func WithCallback(callback func(error)) CollectOption {
 	}
 }
 
-// WithTimeout 设置超时时间
-func WithTimeout(timeout time.Duration) CollectOption {
-	return func(c *Collect) {
-		c.timeout = timeout
-	}
-}
-
 // WithAutoFlushInterval 设置自动刷新间隔
 func WithAutoFlushInterval(interval time.Duration) CollectOption {
 	return func(c *Collect) {
@@ -66,9 +59,14 @@ func WithAutoFlushInterval(interval time.Duration) CollectOption {
 			for {
 				select {
 				case <-ticker.C:
-					_ = c.Flush() // 忽略错误，因为可能在关闭时触发
+					c.mutex.Lock()
+					if c.lastTime.Add(interval).Before(time.Now()) {
+						c.mutex.Unlock()
+					} else {
+						c.mutex.Unlock()
+						_ = c.Flush() // 忽略错误，因为可能在关闭时触发
+					}
 				case <-c.stopChan:
-					fmt.Println("Collect stopped")
 					ticker.Stop()
 					return
 				}
@@ -86,7 +84,6 @@ func NewCollect(client Client, opts ...CollectOption) *Collect {
 		maxBytes:     10 * 1024 * 1024, // 默认最大10MB
 		currentBytes: 0,
 		stopChan:     make(chan struct{}),
-		timeout:      30 * time.Second,
 	}
 
 	for _, opt := range opts {
@@ -172,6 +169,8 @@ func (c *Collect) Size() int {
 // Flush 发送攒批数据到Doris并清空当前批次
 func (c *Collect) Flush() error {
 	c.mutex.Lock()
+
+	c.lastTime = time.Now()
 
 	// 复制数据并清空原数据
 	dataCopy := make([]interface{}, len(c.data))
