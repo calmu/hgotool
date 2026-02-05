@@ -17,19 +17,20 @@ import (
 
 // Config StreamLoad客户端配置
 type Config struct {
-	Host       string            // Doris FE节点地址
-	Port       string            // FE HTTP端口，默认8030
-	Username   string            // 用户名
-	Password   string            // 密码
-	Database   string            // 目标数据库
-	Table      string            // 目标表
-	Label      string            // Label名称，用于保证幂等性
-	BufferSize int               // 缓冲区大小，单位MB
-	BufferRows int               // 缓冲行数
-	Timeout    time.Duration     // 请求超时时间
-	EnableGzip bool              // 是否启用gzip压缩
-	Headers    map[string]string // 自定义HTTP头部参数
-	HLogger    hlog.HLoggerBase  // 日志记录器
+	Host        string            // Doris FE节点地址
+	Port        string            // FE HTTP端口，默认8030
+	Username    string            // 用户名
+	Password    string            // 密码
+	Database    string            // 目标数据库
+	Table       string            // 目标表
+	Label       string            // Label名称，用于保证幂等性
+	LabelPrefix string            // Label前缀，用于自动生成Label，保证幂等性
+	BufferSize  int               // 缓冲区大小，单位MB
+	BufferRows  int               // 缓冲行数
+	Timeout     time.Duration     // 请求超时时间
+	EnableGzip  bool              // 是否启用gzip压缩
+	Headers     map[string]string // 自定义HTTP头部参数
+	HLogger     hlog.HLoggerBase  // 日志记录器
 }
 
 // 默认配置
@@ -91,6 +92,10 @@ func NewStreamLoadClient(config *Config) (*StreamLoadClient, error) {
 		config.Timeout = DefaultConfig.Timeout
 	}
 
+	if config.LabelPrefix == "" {
+		config.LabelPrefix = "stream_load_"
+	}
+
 	client := &http.Client{
 		Timeout: config.Timeout,
 	}
@@ -137,7 +142,7 @@ func (s *StreamLoadClient) Load(data []byte) (*StreamLoadResponse, error) {
 		req.Header.Set("label", s.config.Label)
 	} else {
 		// 自动生成label
-		label := fmt.Sprintf("stream_load_%d", time.Now().Unix())
+		label := fmt.Sprintf("%s%d", s.config.LabelPrefix, time.Now().Unix())
 		req.Header.Set("label", label)
 		s.logger.Info("Generated stream load label", zap.String("label", label))
 	}
@@ -209,8 +214,8 @@ func (s *StreamLoadClient) Load(data []byte) (*StreamLoadResponse, error) {
 	s.logger.Info("StreamLoad response received", zap.String("status", streamLoadResp.Status), zap.String("label", streamLoadResp.Label), zap.Int64("load_bytes", streamLoadResp.LoadBytes))
 
 	// 检查状态
-	// Doris StreamLoad 常见的状态码: 200(成功), 307(临时重定向到BE节点)
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusTemporaryRedirect {
+	// Doris StreamLoad 常见的状态码: 200(成功), 307(临时重定向到BE节点,此时如果是这个状态，则代表请求BE节点未通)
+	if resp.StatusCode != http.StatusOK {
 		s.logger.Warn("StreamLoad request failed", zap.Int("status_code", resp.StatusCode), zap.String("response", string(responseBody)))
 		return &streamLoadResp, fmt.Errorf("request failed with status: %d, response: %s", resp.StatusCode, string(responseBody))
 	} else {
