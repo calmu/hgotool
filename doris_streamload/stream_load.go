@@ -128,8 +128,29 @@ func (s *StreamLoadClient) Load(data []byte) (*StreamLoadResponse, error) {
 
 	s.logger.Info("Starting StreamLoad request", zap.String("url", url), zap.Int("data_size", len(data)))
 
+	var body io.Reader
+	var contentEncoding string
+	// 处理压缩
+	if s.config.EnableGzip {
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		if _, err := gz.Write(data); err != nil {
+			s.logger.Error("Failed to compress data", zap.Error(err))
+			return nil, err
+		}
+		if err := gz.Close(); err != nil {
+			s.logger.Error("Failed to close gzip writer", zap.Error(err))
+			return nil, err
+		}
+		body = &buf
+		contentEncoding = "gzip"
+		s.logger.Info("Data compressed with gzip", zap.Int("original_size", len(data)), zap.Int("compressed_size", buf.Len()))
+	} else {
+		body = bytes.NewReader(data)
+	}
+
 	// 设置请求头
-	req, err := http.NewRequest("PUT", url, nil) // 先创建空请求
+	req, err := http.NewRequest("PUT", url, body)
 	if err != nil {
 		s.logger.Error("Failed to create HTTP request", zap.Error(err))
 		return nil, err
@@ -154,24 +175,8 @@ func (s *StreamLoadClient) Load(data []byte) (*StreamLoadResponse, error) {
 		req.Header.Set(headerName, headerValue)
 	}
 
-	// 根据是否启用gzip压缩设置请求体
-	if s.config.EnableGzip {
-		var buf bytes.Buffer
-		gz := gzip.NewWriter(&buf)
-		if _, err := gz.Write(data); err != nil {
-			s.logger.Error("Failed to compress data", zap.Error(err))
-			return nil, err
-		}
-		if err := gz.Close(); err != nil {
-			s.logger.Error("Failed to close gzip writer", zap.Error(err))
-			return nil, err
-		}
-		req.Body = io.NopCloser(&buf)
-		req.Header.Set("Content-Encoding", "gzip")
-		s.logger.Info("Data compressed with gzip", zap.Int("original_size", len(data)), zap.Int("compressed_size", buf.Len()))
-	} else {
-		// 不启用gzip压缩，直接使用原始数据
-		req.Body = io.NopCloser(bytes.NewReader(data))
+	if contentEncoding != "" {
+		req.Header.Set("Content-Encoding", contentEncoding)
 	}
 
 	// 发送请求
@@ -216,7 +221,7 @@ func (s *StreamLoadClient) Load(data []byte) (*StreamLoadResponse, error) {
 	// 检查状态
 	// Doris StreamLoad 常见的状态码: 200(成功), 307(临时重定向到BE节点,此时如果是这个状态，则代表请求BE节点未通)
 	if resp.StatusCode != http.StatusOK {
-		s.logger.Warn("StreamLoad request failed", zap.Int("status_code", resp.StatusCode), zap.String("response", string(responseBody)))
+		s.logger.Warn("StreamLoad request failed", zap.Int("status_code", resp.StatusCode), zap.Any("headers", resp.Header), zap.String("response", string(responseBody)))
 		return &streamLoadResp, fmt.Errorf("request failed with status: %d, response: %s", resp.StatusCode, string(responseBody))
 	} else {
 		s.logger.Info("StreamLoad request succeeded", zap.Int("status_code", resp.StatusCode), zap.String("status", streamLoadResp.Status), zap.String("label", streamLoadResp.Label))
