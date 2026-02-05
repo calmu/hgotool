@@ -1,6 +1,7 @@
 package doris_streamload
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -12,17 +13,19 @@ import (
 
 // Collect 数据攒批结构体
 type Collect struct {
-	client       Client
-	data         []interface{}
-	maxSize      int              // 最大条数
-	maxBytes     int              // 最大大小（字节）
-	currentBytes int              // 当前大小（字节）
-	mutex        sync.Mutex       // 并发安全锁
-	callback     func(error)      // 回调函数，用于处理发送结果
-	stopChan     chan struct{}    // 停止信号
-	logger       hlog.HLoggerBase // 日志记录器
-	once         sync.Once
-	lastTime     time.Time // 最后一次刷新时间，避免频繁自动刷新
+	client             Client
+	data               [][]byte
+	maxSize            int              // 最大条数
+	maxBytes           int              // 最大大小（字节）
+	currentBytes       int              // 当前大小（字节）
+	mutex              sync.Mutex       // 并发安全锁
+	callback           func(error)      // 回调函数，用于处理发送结果
+	stopChan           chan struct{}    // 停止信号
+	logger             hlog.HLoggerBase // 日志记录器
+	once               sync.Once        // 保证只关闭一次
+	lastTime           time.Time        // 最后一次刷新时间，避免频繁自动刷新
+	buf                bytes.Buffer     // 用来攒批数据
+	autoFlushWhenLimit bool             // 是否在达到阈值时自动刷新
 }
 
 // CollectOption 配置Collect选项
@@ -46,6 +49,13 @@ func WithMaxBytes(bytes int) CollectOption {
 func WithCallback(callback func(error)) CollectOption {
 	return func(c *Collect) {
 		c.callback = callback
+	}
+}
+
+// WithAutoFlushWhenLimit 设置是否在达到阈值时自动刷新，默认为true
+func WithAutoFlushWhenLimit(autoFlushWhenLimit bool) CollectOption {
+	return func(c *Collect) {
+		c.autoFlushWhenLimit = autoFlushWhenLimit
 	}
 }
 
@@ -78,12 +88,13 @@ func WithAutoFlushInterval(interval time.Duration) CollectOption {
 // NewCollect 创建新的Collect实例
 func NewCollect(client Client, opts ...CollectOption) *Collect {
 	collect := &Collect{
-		client:       client,
-		data:         make([]interface{}, 0),
-		maxSize:      1000,             // 默认最大1000条
-		maxBytes:     10 * 1024 * 1024, // 默认最大10MB
-		currentBytes: 0,
-		stopChan:     make(chan struct{}),
+		client:             client,
+		data:               make([][]byte, 0),
+		maxSize:            1000,             // 默认最大1000条
+		maxBytes:           10 * 1024 * 1024, // 默认最大10MB
+		currentBytes:       0,
+		stopChan:           make(chan struct{}),
+		autoFlushWhenLimit: true,
 	}
 
 	for _, opt := range opts {
@@ -122,20 +133,33 @@ func (c *Collect) Add(data interface{}) error {
 		return fmt.Errorf("failed to marshal data: %v", err)
 	}
 
+	return c.addRowByte(jsonData)
+}
+
+func (c *Collect) addRowByte(data []byte) error {
+Loop:
 	// 检查是否超出限制
-	newBytes := c.currentBytes + len(jsonData)
+	newBytes := c.currentBytes + len(data)
+	if newBytes > c.maxBytes {
+		if c.autoFlushWhenLimit {
+			_ = c.Flush()
+			goto Loop
+		} else {
+			c.logger.Warn("Batch byte limit exceeded", zap.Int("current_bytes", newBytes), zap.Int("max_bytes", c.maxBytes))
+			return fmt.Errorf("%w: max %d bytes, current %d", ErrLimitMaxBytes, c.maxBytes, newBytes)
+		}
+	}
 
 	if len(c.data) >= c.maxSize {
-		c.logger.Warn("Batch size limit exceeded", zap.Int("current_size", len(c.data)), zap.Int("max_size", c.maxSize))
-		return fmt.Errorf("batch size limit exceeded: max %d items", c.maxSize)
+		if c.autoFlushWhenLimit {
+			_ = c.Flush()
+			goto Loop
+		} else {
+			c.logger.Warn("Batch size limit exceeded", zap.Int("current_size", len(c.data)), zap.Int("max_size", c.maxSize))
+			return fmt.Errorf("%w: max %d items, current %d", ErrLimitMaxSize, c.maxSize, len(c.data))
+		}
 	}
 
-	if newBytes > c.maxBytes {
-		c.logger.Warn("Batch byte limit exceeded", zap.Int("current_bytes", newBytes), zap.Int("max_bytes", c.maxBytes))
-		return fmt.Errorf("batch byte limit exceeded: max %d bytes", c.maxBytes)
-	}
-
-	// 添加数据
 	c.data = append(c.data, data)
 	c.currentBytes = newBytes
 
@@ -149,6 +173,25 @@ func (c *Collect) Add(data interface{}) error {
 		}()
 	}
 
+	return nil
+}
+
+func (c *Collect) AddRowByte(data []byte) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	return c.addRowByte(data)
+}
+
+func (c *Collect) AddListByte(list [][]byte) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	for _, data := range list {
+		if err := c.addRowByte(data); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -172,38 +215,40 @@ func (c *Collect) Flush() error {
 
 	c.lastTime = time.Now()
 
-	// 复制数据并清空原数据
-	dataCopy := make([]interface{}, len(c.data))
-	copy(dataCopy, c.data)
-
-	// 清空当前批次
-	c.data = c.data[:0]
-	c.currentBytes = 0
-
-	c.mutex.Unlock()
-
 	// 如果没有数据，则直接返回
-	if len(dataCopy) == 0 {
+	dataLen := len(c.data)
+	if dataLen == 0 {
+		c.mutex.Unlock()
 		c.logger.Info("No data to flush, skipping")
 		return nil
 	}
 
-	c.logger.Info("Flushing batch data", zap.Int("batch_size", len(dataCopy)), zap.Int("batch_bytes", len(dataCopy)))
-
-	// 将数据序列化为JSON数组
-	jsonData, err := json.Marshal(dataCopy)
-	if err != nil {
-		c.logger.Error("Failed to marshal batch data", zap.Error(err))
-		if c.callback != nil {
-			c.callback(fmt.Errorf("failed to marshal batch data: %v", err))
+	c.buf.Reset()
+	c.buf.WriteString("[")
+	for i, data := range c.data {
+		if i > 0 {
+			c.buf.WriteString(",")
 		}
-		return fmt.Errorf("failed to marshal batch data: %v", err)
+		c.buf.Write(data)
 	}
+	c.buf.WriteString("]")
+	// 复制数据并清空原数据
+	dataCopy := make([]byte, c.buf.Len())
+	copy(dataCopy, c.buf.Bytes())
+	c.buf.Reset()
+
+	// 清空当前批次
+	c.data = make([][]byte, 0)
+	c.currentBytes = 0
+
+	c.mutex.Unlock()
+
+	c.logger.Info("Flushing batch data", zap.Int("batch_size", dataLen), zap.Int("batch_bytes", len(dataCopy)))
 
 	// 发送到Doris
-	resp, err := c.client.Load(jsonData)
+	resp, err := c.client.Load(dataCopy)
 	if err != nil {
-		c.logger.Error("Failed to load data to Doris", zap.Error(err), zap.String("data", string(jsonData)))
+		c.logger.Error("Failed to load data to Doris", zap.Error(err), zap.String("data", string(dataCopy)))
 		if c.callback != nil {
 			c.callback(err)
 		}
@@ -213,7 +258,7 @@ func (c *Collect) Flush() error {
 	// 检查响应状态
 	if resp.Status != "Success" && resp.Status != "" {
 		errMsg := fmt.Sprintf("stream load failed with status: %s, message: %s", resp.Status, resp.Message)
-		c.logger.Warn("Stream load failed", zap.String("status", resp.Status), zap.String("message", resp.Message), zap.String("data", string(jsonData)))
+		c.logger.Warn("Stream load failed", zap.String("status", resp.Status), zap.String("message", resp.Message), zap.String("data", string(dataCopy)))
 		if c.callback != nil {
 			c.callback(fmt.Errorf(errMsg))
 		}

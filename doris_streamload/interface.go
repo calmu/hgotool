@@ -8,6 +8,8 @@ type Client interface {
 // BatchCollector 批量收集器接口
 type BatchCollector interface {
 	Add(data interface{}) error
+	AddRowByte(data []byte) error
+	AddListByte(list [][]byte) error
 	Len() int
 	Size() int
 	Flush() error
