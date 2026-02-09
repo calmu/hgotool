@@ -154,7 +154,7 @@ func (s *StreamLoadClient) Load(data []byte) (*StreamLoadResponse, error) {
 		label = s.config.Label
 	} else {
 		// 自动生成label
-		label = fmt.Sprintf("%s%d", s.config.LabelPrefix, time.Now().Unix())
+		label = fmt.Sprintf("%s%d", s.config.LabelPrefix, time.Now().UnixMilli())
 		s.logger.Info("Generated stream load label", zap.String("label", label))
 		tmpLabel = label // 用来判断是否能重试时改label
 	}
