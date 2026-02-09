@@ -19,20 +19,21 @@ import (
 
 // Config StreamLoad客户端配置
 type Config struct {
-	Host        string            // Doris FE节点地址
-	Port        string            // FE HTTP端口，默认8030
-	Username    string            // 用户名
-	Password    string            // 密码
-	Database    string            // 目标数据库
-	Table       string            // 目标表
-	Label       string            // Label名称，用于保证幂等性
-	LabelPrefix string            // Label前缀，用于自动生成Label，保证幂等性
-	BufferSize  int               // 缓冲区大小，单位MB
-	BufferRows  int               // 缓冲行数
-	Timeout     time.Duration     // 请求超时时间
-	EnableGzip  bool              // 是否启用gzip压缩
-	Headers     map[string]string // 自定义HTTP头部参数
-	HLogger     hlog.HLoggerBase  // 日志记录器
+	Host          string            // Doris FE节点地址
+	Port          string            // FE HTTP端口，默认8030
+	Username      string            // 用户名
+	Password      string            // 密码
+	Database      string            // 目标数据库
+	Table         string            // 目标表
+	Label         string            // Label名称，用于保证幂等性
+	LabelPrefix   string            // Label前缀，用于自动生成Label，保证幂等性
+	BufferSize    int               // 缓冲区大小，单位MB
+	BufferRows    int               // 缓冲行数
+	Timeout       time.Duration     // 请求超时时间
+	EnableGzip    bool              // 是否启用gzip压缩
+	Headers       map[string]string // 自定义HTTP头部参数
+	HLogger       hlog.HLoggerBase  // 日志记录器
+	PrintRetryErr bool              // 是否打印重试信息
 }
 
 // DefaultConfig 默认配置
@@ -169,13 +170,21 @@ func (s *StreamLoadClient) Load(data []byte) (*StreamLoadResponse, error) {
 		retry.MaxJitter(time.Millisecond*500),
 		retry.LastErrorOnly(true),
 		retry.OnRetry(func(retryNo uint, err error) {
-			s.logger.Info("StreamLoad request failed, retrying", zap.Error(err), zap.Uint("retry_no", retryNo))
+			if s.config.PrintRetryErr {
+				s.logger.Warn("StreamLoad request failed, retrying", zap.Error(err), zap.Uint("retry_no", retryNo), zap.String("label", label))
+			} else {
+				s.logger.Info("StreamLoad request failed, retrying", zap.Error(err), zap.Uint("retry_no", retryNo), zap.String("label", label))
+			}
 		}),
 		retry.RetryIf(func(err error) bool {
 			if err == nil {
 				return false
 			}
-			s.logger.Info("StreamLoad request failed, retrying", zap.Error(err), zap.Uint("attempts_left", attempts-1))
+			if s.config.PrintRetryErr {
+				s.logger.Warn("StreamLoad request failed, retrying", zap.Error(err), zap.Uint("attempts_left", attempts-1), zap.String("label", label))
+			} else {
+				s.logger.Info("StreamLoad request failed, retrying", zap.Error(err), zap.Uint("attempts_left", attempts-1), zap.String("label", label))
+			}
 			attempts--
 			return true
 		}),
