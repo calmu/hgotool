@@ -35,7 +35,7 @@ type Config struct {
 	HLogger     hlog.HLoggerBase  // 日志记录器
 }
 
-// 默认配置
+// DefaultConfig 默认配置
 var DefaultConfig = &Config{
 	Port:       "8030",
 	BufferSize: 10, // 10MB
@@ -46,18 +46,31 @@ var DefaultConfig = &Config{
 
 // StreamLoadResponse StreamLoad响应结果
 type StreamLoadResponse struct {
-	Status          string                   `json:"status"`
-	Message         string                   `json:"msg"`
-	Label           string                   `json:"label"`
-	StmtID          int64                    `json:"stmtId"`
-	LoadBytes       int64                    `json:"loadBytes"`
-	LoadRows        int64                    `json:"loadRows"`
-	LoadTimeMs      int64                    `json:"loadTimeMs"`
-	ErrorURL        string                   `json:"errorURL,omitempty"`
-	UnfinishedTasks []map[string]interface{} `json:"unfinishTasks,omitempty"`
-	TrackingURL     string                   `json:"tracking_url"`
-	Data            map[string]interface{}   `json:"data,omitempty"`
+	TxnId                  int    `json:"TxnId"`                            // 导入事务的 ID
+	Label                  string `json:"Label"`                            // 导入作业的 label，通过 -H "label:<label_id>" 指定
+	Status                 string `json:"Status"`                           // 导入的最终状态 - Success：表示导入成功, - Publish Timeout：该状态也表示导入已经完成，但数据可能会延迟可见，无需重试,- Label Already Exists：Label 重复，需要更换 label,- Fail：导入失败
+	ExistingJobStatus      string `json:"ExistingJobStatus,omitempty"`      // 已存在的 Label 对应的导入作业的状态。这个字段只有在当 Status 为 "Label Already Exists" 时才会显示。用户可以通过这个状态，知晓已存在 Label 对应的导入作业的状态。"RUNNING" 表示作业还在执行，"FINISHED" 表示作业成功。
+	Message                string `json:"Message,omitempty"`                // 导入错误信息
+	NumberTotalRows        int    `json:"NumberTotalRows,omitempty"`        // 导入总处理的行数
+	NumberLoadedRows       int    `json:"NumberLoadedRows,omitempty"`       // 成功导入的行数
+	NumberFilteredRows     int    `json:"NumberFilteredRows,omitempty"`     // 数据质量不合格的行数
+	NumberUnselectedRows   int    `json:"NumberUnselectedRows,omitempty"`   // 被 where 条件过滤的行数
+	LoadBytes              int    `json:"LoadBytes,omitempty"`              // 导入的字节数
+	LoadTimeMs             int    `json:"LoadTimeMs,omitempty"`             // 导入完成时间。单位毫秒
+	BeginTxnTimeMs         int    `json:"BeginTxnTimeMs,omitempty"`         // 向 FE 请求开始一个事务所花费的时间，单位毫秒
+	StreamLoadPutTimeMs    int    `json:"StreamLoadPutTimeMs,omitempty"`    // 向 FE 请求获取导入数据执行计划所花费的时间，单位毫秒
+	ReadDataTimeMs         int    `json:"ReadDataTimeMs,omitempty"`         // 读取数据所花费的时间，单位毫秒
+	WriteDataTimeMs        int    `json:"WriteDataTimeMs,omitempty"`        // 执行写入数据操作所花费的时间，单位毫秒
+	CommitAndPublishTimeMs int    `json:"CommitAndPublishTimeMs,omitempty"` // 向 FE 请求提交并且发布事务所花费的时间，单位毫秒
+	ErrorURL               string `json:"ErrorURL,omitempty"`               // 如果有数据质量问题，通过访问这个 URL 查看具体错误行
 }
+
+const (
+	StreamLoadResponseLabelSuccess       = "Success"              // - Success：表示导入成功
+	StreamLoadResponseLabelAlreadyExists = "Label Already Exists" // - Publish Timeout：该状态也表示导入已经完成，但数据可能会延迟可见，无需重试
+	StreamLoadResponsePublishTimeout     = "Publish Timeout"      // - Label Already Exists：Label 重复，需要更换 label
+	StreamLoadResponseLabelFail          = "Fail"                 // - Fail：导入失败
+)
 
 // StreamLoadClient StreamLoad客户端
 type StreamLoadClient struct {
@@ -237,11 +250,14 @@ func (s *StreamLoadClient) Load(data []byte) (*StreamLoadResponse, error) {
 					s.logger.Info("Failed to unmarshal response JSON, using default response", zap.Error(err), zap.String("response_body", string(responseBody)))
 					return fmt.Errorf("%w: %v", ErrUnmarshalResponseFail, err)
 				}
-				// 增加判断，如果是返回信息说label重复，且attempts < 3，且tmpLabel==label， 则应给label加个后缀
-				if streamLoadResp.Status == "Label Already Exists" && attempts > 0 && tmpLabel == label {
+				// 增加判断，如果是返回信息说label重复，且attempts < 3，且tmpLabel==label， 则应给label加个后缀 || StreamLoadResponseLabelFail && ErrorURL == ""也可以重试
+				if streamLoadResp.Status == StreamLoadResponseLabelAlreadyExists &&
+					attempts > 0 && tmpLabel == label {
 					label = fmt.Sprintf("%s_%d", label, attempts)
 					s.logger.Info("Label already exists, retrying with new label", zap.String("label", label))
 					return ErrReturnLabelAlreadyExist
+				} else if streamLoadResp.Status == StreamLoadResponseLabelFail && streamLoadResp.ErrorURL == "" {
+					return ErrReturnLabelFail
 				}
 			} else {
 				s.logger.Info("Received empty response body, assuming success")
@@ -255,14 +271,14 @@ func (s *StreamLoadClient) Load(data []byte) (*StreamLoadResponse, error) {
 	if errors.Is(err, ErrUnmarshalResponseFail) {
 		// 如果JSON解析失败，使用默认响应并记录警告
 		streamLoadResp = StreamLoadResponse{
-			Status:  "Success",
+			Status:  StreamLoadResponseLabelSuccess,
 			Label:   s.config.Label,
 			Message: fmt.Sprintf("Warning: Could not parse response JSON: %v", err),
 		}
 	} else if errors.Is(err, ErrEmptyResponse) {
 		// 如果响应为空，假设成功并使用默认响应
 		streamLoadResp = StreamLoadResponse{
-			Status:  "Success",
+			Status:  StreamLoadResponseLabelSuccess,
 			Label:   s.config.Label,
 			Message: "Empty response received",
 		}
@@ -272,7 +288,7 @@ func (s *StreamLoadClient) Load(data []byte) (*StreamLoadResponse, error) {
 		return nil, err
 	}
 
-	s.logger.Info("StreamLoad response received", zap.String("status", streamLoadResp.Status), zap.String("label", streamLoadResp.Label), zap.Int64("load_bytes", streamLoadResp.LoadBytes))
+	s.logger.Info("StreamLoad response received", zap.Any("response", streamLoadResp))
 
 	// 检查状态
 	// Doris StreamLoad 常见的状态码: 200(成功), 307(临时重定向到BE节点,此时如果是这个状态，则代表请求BE节点未通)
@@ -280,7 +296,7 @@ func (s *StreamLoadClient) Load(data []byte) (*StreamLoadResponse, error) {
 		s.logger.Warn("StreamLoad request failed", zap.Int("status_code", resp.StatusCode), zap.Any("headers", resp.Header), zap.String("response", string(responseBody)), zap.Uint("attempts", attempts))
 		return &streamLoadResp, fmt.Errorf("%w: request failed with status: %d, response: %s", ErrHttpStatusNotOk, resp.StatusCode, string(responseBody))
 	} else {
-		s.logger.Info("StreamLoad request succeeded", zap.Int("status_code", resp.StatusCode), zap.String("status", streamLoadResp.Status), zap.String("label", streamLoadResp.Label))
+		s.logger.Info("StreamLoad request succeeded", zap.Int("status_code", resp.StatusCode), zap.Any("response", streamLoadResp))
 	}
 
 	return &streamLoadResp, nil

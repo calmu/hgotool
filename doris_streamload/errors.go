@@ -22,4 +22,5 @@ var (
 	ErrUnmarshalResponseFail   = errors.New("unmarshal response fail")
 	ErrEmptyResponse           = errors.New("empty response")
 	ErrReturnLabelAlreadyExist = errors.New("return label already exist")
+	ErrReturnLabelFail         = errors.New("return label fail")
 )
