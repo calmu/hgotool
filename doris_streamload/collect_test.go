@@ -17,11 +17,11 @@ func (m *MockStreamLoadClient) Load(data []byte) (*StreamLoadResponse, error) {
 	}
 	// 默认成功响应
 	return &StreamLoadResponse{
-		Status:     "Success",
-		Label:      "test_label",
-		LoadBytes:  int64(len(data)),
-		LoadRows:   1,
-		LoadTimeMs: 100,
+		Status:           "Success",
+		Label:            "test_label",
+		LoadBytes:        len(data),
+		NumberLoadedRows: 1,
+		LoadTimeMs:       100,
 	}, nil
 }
 

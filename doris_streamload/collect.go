@@ -252,11 +252,11 @@ func (c *Collect) Flush() error {
 		if c.callback != nil {
 			c.callback(err)
 		}
-		return fmt.Errorf("failed to load data to Doris: %v", err)
+		return err
 	}
 
 	// 检查响应状态
-	if resp.Status != "Success" && resp.Status != "" {
+	if resp.Status != StreamLoadResponseLabelSuccess && resp.Status != "" {
 		errMsg := fmt.Sprintf("stream load failed with status: %s, message: %s", resp.Status, resp.Message)
 		c.logger.Warn("Stream load failed", zap.String("status", resp.Status), zap.String("message", resp.Message), zap.String("data", string(dataCopy)))
 		if c.callback != nil {
