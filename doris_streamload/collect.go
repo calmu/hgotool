@@ -18,7 +18,7 @@ type Collect struct {
 	maxSize            int              // 最大条数
 	maxBytes           int              // 最大大小（字节）
 	currentBytes       int              // 当前大小（字节）
-	mutex              sync.Mutex       // 并发安全锁
+	rwMutex            sync.RWMutex     // 并发安全锁
 	callback           func(error)      // 回调函数，用于处理发送结果
 	stopChan           chan struct{}    // 停止信号
 	logger             hlog.HLoggerBase // 日志记录器
@@ -69,11 +69,11 @@ func WithAutoFlushInterval(interval time.Duration) CollectOption {
 			for {
 				select {
 				case <-ticker.C:
-					c.mutex.Lock()
+					c.rwMutex.Lock()
 					if c.lastTime.Add(interval).Before(time.Now()) {
-						c.mutex.Unlock()
+						c.rwMutex.Unlock()
 					} else {
-						c.mutex.Unlock()
+						c.rwMutex.Unlock()
 						_ = c.Flush() // 忽略错误，因为可能在关闭时触发
 					}
 				case <-c.stopChan:
@@ -123,9 +123,6 @@ func NewCollect(client Client, opts ...CollectOption) *Collect {
 
 // Add 添加数据到攒批中
 func (c *Collect) Add(data interface{}) error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
 	// 序列化数据以计算大小
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -139,26 +136,30 @@ func (c *Collect) Add(data interface{}) error {
 func (c *Collect) addRowByte(data []byte) error {
 Loop:
 	// 检查是否超出限制
-	newBytes := c.currentBytes + len(data)
+	newBytes := c.Size() + len(data)
 	if newBytes > c.maxBytes {
 		if c.autoFlushWhenLimit {
 			_ = c.Flush()
 			goto Loop
 		} else {
-			c.logger.Warn("Batch byte limit exceeded", zap.Int("current_bytes", newBytes), zap.Int("max_bytes", c.maxBytes))
+			c.logger.Info("Batch byte limit exceeded", zap.Int("current_bytes", newBytes), zap.Int("max_bytes", c.maxBytes))
 			return fmt.Errorf("%w: max %d bytes, current %d", ErrLimitMaxBytes, c.maxBytes, newBytes)
 		}
 	}
 
-	if len(c.data) >= c.maxSize {
+	dataLen := c.Len()
+	if dataLen >= c.maxSize {
 		if c.autoFlushWhenLimit {
 			_ = c.Flush()
 			goto Loop
 		} else {
-			c.logger.Warn("Batch size limit exceeded", zap.Int("current_size", len(c.data)), zap.Int("max_size", c.maxSize))
-			return fmt.Errorf("%w: max %d items, current %d", ErrLimitMaxSize, c.maxSize, len(c.data))
+			c.logger.Info("Batch size limit exceeded", zap.Int("current_size", dataLen), zap.Int("max_size", c.maxSize))
+			return fmt.Errorf("%w: max %d items, current %d", ErrLimitMaxSize, c.maxSize, dataLen)
 		}
 	}
+
+	c.rwMutex.Lock()
+	defer c.rwMutex.Unlock()
 
 	c.data = append(c.data, data)
 	c.currentBytes = newBytes
@@ -177,16 +178,10 @@ Loop:
 }
 
 func (c *Collect) AddRowByte(data []byte) error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
 	return c.addRowByte(data)
 }
 
 func (c *Collect) AddListByte(list [][]byte) error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-
 	for _, data := range list {
 		if err := c.addRowByte(data); err != nil {
 			return err
@@ -197,31 +192,24 @@ func (c *Collect) AddListByte(list [][]byte) error {
 
 // Len 返回当前攒批中的数据条数
 func (c *Collect) Len() int {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	c.rwMutex.RLock()
+	defer c.rwMutex.RUnlock()
 	return len(c.data)
 }
 
 // Size 返回当前攒批的大小（字节数）
 func (c *Collect) Size() int {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	c.rwMutex.RLock()
+	defer c.rwMutex.RUnlock()
 	return c.currentBytes
 }
 
-// Flush 发送攒批数据到Doris并清空当前批次
-func (c *Collect) Flush() error {
-	c.mutex.Lock()
+// buildBatchData 构建攒批数据
+func (c *Collect) buildBatchData() []byte {
+	c.rwMutex.Lock()
+	defer c.rwMutex.Unlock()
 
 	c.lastTime = time.Now()
-
-	// 如果没有数据，则直接返回
-	dataLen := len(c.data)
-	if dataLen == 0 {
-		c.mutex.Unlock()
-		c.logger.Info("No data to flush, skipping")
-		return nil
-	}
 
 	c.buf.Reset()
 	c.buf.WriteString("[")
@@ -241,8 +229,18 @@ func (c *Collect) Flush() error {
 	c.data = make([][]byte, 0)
 	c.currentBytes = 0
 
-	c.mutex.Unlock()
+	return dataCopy
+}
 
+// Flush 发送攒批数据到Doris并清空当前批次
+func (c *Collect) Flush() error {
+	// 如果没有数据，则直接返回
+	dataLen := c.Len()
+	if dataLen == 0 {
+		c.logger.Info("No data to flush, skipping")
+		return nil
+	}
+	dataCopy := c.buildBatchData()
 	c.logger.Info("Flushing batch data", zap.Int("batch_size", dataLen), zap.Int("batch_bytes", len(dataCopy)))
 
 	// 发送到Doris
