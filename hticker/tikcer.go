@@ -10,6 +10,7 @@ package hticker
 
 import (
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,8 @@ type Ticker struct {
 	quitFunc    func()
 	tickFunc    func()
 	isGoroutine bool
+	runFirst    bool // 是否先执行一次， 默认不执行
+	once        sync.Once
 }
 
 type Option func(*Ticker)
@@ -48,6 +51,12 @@ func WithQuitFunc(f func()) Option {
 	}
 }
 
+func WithRunFirst(runFirst bool) Option {
+	return func(t *Ticker) {
+		t.runFirst = runFirst
+	}
+}
+
 func (t *Ticker) Start() {
 	if t.isGoroutine {
 		go t.start()
@@ -62,6 +71,9 @@ func (t *Ticker) start() {
 			t.deferFunc()
 		}
 	}()
+	if t.runFirst {
+		t.tickFunc()
+	}
 	for {
 		select {
 		case <-t.Quit:
@@ -88,6 +100,8 @@ func NewTicker(d time.Duration, options ...Option) *Ticker {
 }
 
 func (t *Ticker) Stop() {
-	t.Ticker.Stop()
-	close(t.Quit)
+	t.once.Do(func() {
+		t.Ticker.Stop()
+		close(t.Quit)
+	})
 }
