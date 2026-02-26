@@ -98,7 +98,7 @@ func (tg *TaskGroup) buildTaskStateKey(task *Task) string {
 func (tg *TaskGroup) syncTasksStateFromHeartbeat(hb *Heartbeat) {
 	for _, task := range tg.tasks {
 		key := tg.buildTaskStateKey(task)
-		if tStr, err := hb.getHeartbeatFunc(key); err != nil && !errors.Is(err, redis.Nil) {
+		if tStr, err := hb.getHeartbeatFunc(hb.buildCacheKey(key)); err != nil && !errors.Is(err, redis.Nil) { // Fixed: Added missing argument
 			if hb.logger != nil {
 				hb.logger.Error("get task state error", zap.Error(err), zap.String("key", key))
 			}
@@ -107,7 +107,7 @@ func (tg *TaskGroup) syncTasksStateFromHeartbeat(hb *Heartbeat) {
 			// 同时应该初始化状态到外部缓存
 			if tStr == "" {
 				task.state = StateStart
-				hb.saveHeartbeatFunc(key, task.state)
+				hb.saveHeartbeatFunc(hb.buildCacheKey(key), task.state) // Fixed: Added missing argument
 			}
 			// 操作任务
 			switch tStr {

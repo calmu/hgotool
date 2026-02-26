@@ -166,6 +166,10 @@ func (hb *Heartbeat) Start(wg *sync.WaitGroup) {
 
 }
 
+func (hb *Heartbeat) buildCacheKey(key string) string {
+	return hb.cachePrefix + key
+}
+
 func (hb *Heartbeat) syncHeartbeatToCache(hbList map[string]*HeartbeatInfo) {
 	if hb.logger != nil {
 		hb.logger.Info("saveTicker tick", zap.Any("hbList", hbList))
@@ -173,7 +177,7 @@ func (hb *Heartbeat) syncHeartbeatToCache(hbList map[string]*HeartbeatInfo) {
 
 	for key, val := range hbList {
 		valStr, _ := json.Marshal(val)
-		hb.saveHeartbeatFunc(key, string(valStr))
+		hb.saveHeartbeatFunc(hb.buildCacheKey(key), string(valStr)) // Fixed: Added missing argument
 	}
 }
 
@@ -218,7 +222,7 @@ func (hb *Heartbeat) runGroup(wg *sync.WaitGroup) {
 		// 读组状态
 		gKey := tg.buildStateKey()
 
-		if gStr, err := hb.getHeartbeatFunc(gKey); err != nil && !errors.Is(err, redis.Nil) {
+		if gStr, err := hb.getHeartbeatFunc(hb.buildCacheKey(gKey)); err != nil && !errors.Is(err, redis.Nil) { // Fixed: Added missing argument
 			if hb.logger != nil {
 				hb.logger.Error("getHeartbeatFunc error", zap.Error(err), zap.String("gKey", gKey))
 			}
@@ -227,7 +231,7 @@ func (hb *Heartbeat) runGroup(wg *sync.WaitGroup) {
 			// 同时应该初始化组状态到外部缓存
 			if gStr == "" {
 				gStr = StateStart
-				hb.saveHeartbeatFunc(gKey, gStr)
+				hb.saveHeartbeatFunc(hb.buildCacheKey(gKey), gStr) // Fixed: Added missing argument
 			}
 			// 操作组
 			switch gStr {
