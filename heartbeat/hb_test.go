@@ -103,15 +103,20 @@ func testHbStop(t *testing.T, runStop bool) {
 		WithLogger(hlog.GetLogger("heartbeat")),
 	)
 
-	task1 := NewTask("task-1", WithInitFunc(func() { t.Log("task-1 init") }), WithRunFunc(func() {
+	var task1 *Task
+
+	task1 = NewTask("task-1", WithInitFunc(func() { t.Log("task-1 init") }), WithRunFunc(func() {
 		defer t.Log("task-1 run end")
 		t.Log("task-1 run")
 		time.Sleep(time.Second * 10)
+		t.Log(task1, time.Now())
+		task1.Heartbeat(hb)
 		// 如果是真运行结束，必须在这里执行心跳stop,避免重复拉起；
 		if runStop {
 			hb.Stop()
 		}
 	}))
+	fmt.Println(task1, 2)
 
 	tg := NewTaskGroup(WithGroupName("test-one1"), WithTaskList(task1))
 
@@ -136,11 +141,11 @@ func testHbStop(t *testing.T, runStop bool) {
 func TestHbStateStop(t *testing.T) {
 	cacheKeyPrefix := "test-one1:task-1:"
 	stateCacheKey := fmt.Sprintf("%sstate", cacheKeyPrefix)
-	setHeartbeat(stateCacheKey, "stop")
+	setHeartbeat(stateCacheKey, StateStop)
 	testHbStop(t, false)
 	for key, s2 := range cacheList {
 		if key == stateCacheKey {
-			if s2 != "stop" {
+			if s2 != StateStop {
 				t.Errorf("heartbeat state is not stop, %s", s2)
 			}
 		} else if strings.HasPrefix(key, cacheKeyPrefix) {
@@ -170,12 +175,12 @@ func TestHbRunAfterStateStop(t *testing.T) {
 	stateCacheKey := fmt.Sprintf("%sstate", cacheKeyPrefix)
 	go func() {
 		time.Sleep(time.Second * 5)
-		setHeartbeat(stateCacheKey, "stop")
+		setHeartbeat(stateCacheKey, StateStop)
 	}()
 	testHbStop(t, false)
 	for key, s2 := range cacheList {
 		if key == stateCacheKey {
-			if s2 != "stop" {
+			if s2 != StateStop {
 				t.Errorf("heartbeat state is not stop, %s", s2)
 			}
 		} else if strings.HasPrefix(key, cacheKeyPrefix) {
@@ -203,11 +208,11 @@ func TestHbRunAfterStateStop(t *testing.T) {
 func TestHbStatePause(t *testing.T) {
 	cacheKeyPrefix := "test-one1:task-1:"
 	stateCacheKey := fmt.Sprintf("%sstate", cacheKeyPrefix)
-	setHeartbeat(stateCacheKey, "pause")
+	setHeartbeat(stateCacheKey, StatePause)
 	testHbStop(t, false)
 	for key, s2 := range cacheList {
 		if key == stateCacheKey {
-			if s2 != "pause" {
+			if s2 != StatePause {
 				t.Errorf("heartbeat state is not pause, %s", s2)
 			}
 		} else if strings.HasPrefix(key, cacheKeyPrefix) {
@@ -237,12 +242,12 @@ func TestHbRunAfterStatePause(t *testing.T) {
 	stateCacheKey := fmt.Sprintf("%sstate", cacheKeyPrefix)
 	go func() {
 		time.Sleep(time.Second * 5)
-		setHeartbeat(stateCacheKey, "pause")
+		setHeartbeat(stateCacheKey, StatePause)
 	}()
 	testHbStop(t, false)
 	for key, s2 := range cacheList {
 		if key == stateCacheKey {
-			if s2 != "pause" {
+			if s2 != StatePause {
 				t.Errorf("heartbeat state is not pause, %s", s2)
 			}
 		} else if strings.HasPrefix(key, cacheKeyPrefix) {
@@ -251,6 +256,78 @@ func TestHbRunAfterStatePause(t *testing.T) {
 			if strings.HasSuffix(key, "info") {
 				if info.State != StatePause {
 					t.Errorf("heartbeat state is not pause, %s", s2)
+				}
+				minTime := time.Now().AddDate(-1, 0, 0)
+				if info.StopTime.Before(minTime) {
+					t.Errorf("heartbeat stop time is before min time, %s", s2)
+				}
+				if info.Heartbeat.Before(minTime) {
+					t.Errorf("heartbeat last heartbeat time is before min time, %s", s2)
+				}
+				if info.CreatedAt.Before(minTime) {
+					t.Errorf("heartbeat created time is before min time, %s", s2)
+				}
+			}
+		}
+	}
+}
+
+func TestHbRunStartAfterPause(t *testing.T) {
+	cacheKeyPrefix := "test-one1:task-1:"
+	stateCacheKey := fmt.Sprintf("%sstate", cacheKeyPrefix)
+	setHeartbeat(stateCacheKey, StatePause)
+	go func() {
+		time.Sleep(time.Second * 5)
+		setHeartbeat(stateCacheKey, StateStart)
+	}()
+	testHbStop(t, true)
+	for key, s2 := range cacheList {
+		if key == stateCacheKey {
+			if s2 != StateStart {
+				t.Errorf("heartbeat state is not start, %s", s2)
+			}
+		} else if strings.HasPrefix(key, cacheKeyPrefix) {
+			var info HeartbeatInfo
+			_ = json.Unmarshal([]byte(s2), &info)
+			if strings.HasSuffix(key, "info") {
+				if info.State != StateStop {
+					t.Errorf("heartbeat state is not stop, %s", s2)
+				}
+				minTime := time.Now().AddDate(-1, 0, 0)
+				if info.StopTime.Before(minTime) {
+					t.Errorf("heartbeat stop time is before min time, %s", s2)
+				}
+				if info.Heartbeat.Before(minTime) {
+					t.Errorf("heartbeat last heartbeat time is before min time, %s", s2)
+				}
+				if info.CreatedAt.Before(minTime) {
+					t.Errorf("heartbeat created time is before min time, %s", s2)
+				}
+			}
+		}
+	}
+}
+
+func TestHbRunStartAfterStop(t *testing.T) {
+	cacheKeyPrefix := "test-one1:task-1:"
+	stateCacheKey := fmt.Sprintf("%sstate", cacheKeyPrefix)
+	setHeartbeat(stateCacheKey, StateStop)
+	go func() {
+		time.Sleep(time.Second * 5)
+		setHeartbeat(stateCacheKey, StateStart)
+	}()
+	testHbStop(t, true)
+	for key, s2 := range cacheList {
+		if key == stateCacheKey {
+			if s2 != StateStart {
+				t.Errorf("heartbeat state is not start, %s", s2)
+			}
+		} else if strings.HasPrefix(key, cacheKeyPrefix) {
+			var info HeartbeatInfo
+			_ = json.Unmarshal([]byte(s2), &info)
+			if strings.HasSuffix(key, "info") {
+				if info.State != StateStop {
+					t.Errorf("heartbeat state is not stop, %s", s2)
 				}
 				minTime := time.Now().AddDate(-1, 0, 0)
 				if info.StopTime.Before(minTime) {

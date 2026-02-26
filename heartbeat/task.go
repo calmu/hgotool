@@ -8,7 +8,9 @@
 // --------------------------------------------
 package heartbeat
 
-import "time"
+import (
+	"time"
+)
 
 type Task struct {
 	name      string

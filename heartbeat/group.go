@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 	"sync"
 	"time"
 )
@@ -98,7 +99,9 @@ func (tg *TaskGroup) syncTasksStateFromHeartbeat(hb *Heartbeat) {
 	for _, task := range tg.tasks {
 		key := tg.buildTaskStateKey(task)
 		if tStr, err := hb.getHeartbeatFunc(key); err != nil && !errors.Is(err, redis.Nil) {
-			// 应该记录日志
+			if hb.logger != nil {
+				hb.logger.Error("get task state error", zap.Error(err), zap.String("key", key))
+			}
 			continue
 		} else {
 			// 同时应该初始化状态到外部缓存

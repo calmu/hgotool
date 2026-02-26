@@ -198,6 +198,7 @@ func (hb *Heartbeat) collect(hbList map[string]*HeartbeatInfo) {
 				hbList[key].StopTime = task.stopTime
 			} else if task.state == StatePause {
 				hbList[key].State = StatePause
+				hbList[key].StopTime = task.stopTime
 			}
 
 			// Update heartbeat if state is not Stop
@@ -218,7 +219,9 @@ func (hb *Heartbeat) runGroup(wg *sync.WaitGroup) {
 		gKey := tg.buildStateKey()
 
 		if gStr, err := hb.getHeartbeatFunc(gKey); err != nil && !errors.Is(err, redis.Nil) {
-			// 应该记录日志
+			if hb.logger != nil {
+				hb.logger.Error("getHeartbeatFunc error", zap.Error(err), zap.String("gKey", gKey))
+			}
 			continue
 		} else {
 			// 同时应该初始化组状态到外部缓存
