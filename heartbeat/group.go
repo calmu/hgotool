@@ -56,25 +56,34 @@ func (tg *TaskGroup) run(wg *sync.WaitGroup) {
 		return
 	}
 	for _, task := range tg.tasks {
-		// 判断一下任务状态
-		if task.state != StateStart {
-			continue
+		tg.runTask(wg, task)
+	}
+}
+
+func (tg *TaskGroup) runTask(wg *sync.WaitGroup, task *Task) {
+	task.lock.Lock()
+	defer task.lock.Unlock()
+	// 判断一下任务状态
+	if task.state != StateStart {
+		return
+	}
+	if task.isRunning == false && task.runFunc != nil {
+		if task.initFunc != nil {
+			task.initFunc()
 		}
-		if task.isRunning == false && task.runFunc != nil {
-			if task.initFunc != nil {
-				task.initFunc()
-			}
-			task.heartbeat = time.Now()
-			wg.Add(1)
-			go func() {
-				defer func() {
-					task.isRunning = false
-					wg.Done()
-				}()
-				task.isRunning = true
-				task.runFunc()
+		task.heartbeat = time.Now()
+		task.isRunning = true
+		wg.Add(1)
+		go func() {
+			defer func() {
+				task.lock.Lock()
+				defer task.lock.Unlock()
+
+				task.isRunning = false
+				wg.Done()
 			}()
-		}
+			task.runFunc()
+		}()
 	}
 }
 
@@ -98,7 +107,7 @@ func (tg *TaskGroup) buildTaskStateKey(task *Task) string {
 func (tg *TaskGroup) syncTasksStateFromHeartbeat(hb *Heartbeat) {
 	for _, task := range tg.tasks {
 		key := tg.buildTaskStateKey(task)
-		if tStr, err := hb.getHeartbeatFunc(key); err != nil && !errors.Is(err, redis.Nil) {
+		if tStr, err := hb.getHeartbeatFunc(hb.buildCacheKey(key)); err != nil && !errors.Is(err, redis.Nil) { // Fixed: Added missing argument
 			if hb.logger != nil {
 				hb.logger.Error("get task state error", zap.Error(err), zap.String("key", key))
 			}
@@ -107,7 +116,7 @@ func (tg *TaskGroup) syncTasksStateFromHeartbeat(hb *Heartbeat) {
 			// 同时应该初始化状态到外部缓存
 			if tStr == "" {
 				task.state = StateStart
-				hb.saveHeartbeatFunc(key, task.state)
+				hb.saveHeartbeatFunc(hb.buildCacheKey(key), task.state) // Fixed: Added missing argument
 			}
 			// 操作任务
 			switch tStr {

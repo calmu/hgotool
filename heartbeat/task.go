@@ -9,6 +9,7 @@
 package heartbeat
 
 import (
+	"sync"
 	"time"
 )
 
@@ -21,6 +22,7 @@ type Task struct {
 	state     string    // task state, default is StateStart, can be StateStart, StatePause, StateStop
 	isRunning bool      // task is running, default is false
 	stopTime  time.Time // task stop time
+	lock      sync.RWMutex
 }
 
 type TaskOption func(*Task)
