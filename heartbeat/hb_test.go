@@ -116,7 +116,7 @@ func testHbStop(t *testing.T, runStop bool) {
 		t.Log("task-1 run")
 		time.Sleep(time.Second * 6)
 		t.Log(task1, time.Now())
-		task1.Heartbeat(hb)
+		task1.Heartbeat()
 		// 如果是真运行结束，必须在这里执行心跳stop,避免重复拉起；
 		if runStop {
 			hb.Stop()
@@ -128,8 +128,7 @@ func testHbStop(t *testing.T, runStop bool) {
 		t.Log("task-2 run")
 		<-ctx.Done()
 		t.Log(task2, time.Now())
-		task2.Heartbeat(hb)
-	}), WithStopFunc(func() { t.Log("task-2 stop") }))
+	}), WithStopFunc(func() { t.Log("task-2 stop") }), WithRunTickerFlag(true))
 
 	tg := NewTaskGroup(WithGroupName("test-one1"), WithTaskList(task1, task2))
 

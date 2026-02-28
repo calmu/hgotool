@@ -82,6 +82,12 @@ func (tg *TaskGroup) runTask(wg *sync.WaitGroup, task *Task) {
 				task.isRunning = false
 				wg.Done()
 			}()
+			// 如果心跳任务需要定时运行，则启动任务
+			if task.runTickerFlag {
+				defer task.StopHeartbeat()
+
+				task.StartHeartbeat()
+			}
 			task.runFunc()
 		}()
 	}
