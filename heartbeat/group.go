@@ -93,12 +93,9 @@ func (tg *TaskGroup) runTask(wg *sync.WaitGroup, task *Task) {
 	}
 }
 
-func (tg *TaskGroup) stop() {
+func (tg *TaskGroup) stop(state string) {
 	for _, task := range tg.tasks {
-		if task.stopFunc != nil {
-			task.stopTime = time.Now()
-			task.stopFunc()
-		}
+		task.stop(state)
 	}
 }
 

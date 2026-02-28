@@ -264,15 +264,11 @@ func (hb *Heartbeat) runGroup(wg *sync.WaitGroup) {
 				tg.run(wg)
 			case StatePause, StateStop:
 				tg.state = gStr
-				tg.stop()
+				tg.stop(gStr)
 				continue
 			}
 		}
 	}
-}
-
-func (hb *Heartbeat) Stop() {
-	hb.ticker.Stop()
 }
 
 // HeartbeatInfo task heartbeat info
