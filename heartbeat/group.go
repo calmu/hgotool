@@ -56,25 +56,34 @@ func (tg *TaskGroup) run(wg *sync.WaitGroup) {
 		return
 	}
 	for _, task := range tg.tasks {
-		// 判断一下任务状态
-		if task.state != StateStart {
-			continue
+		tg.runTask(wg, task)
+	}
+}
+
+func (tg *TaskGroup) runTask(wg *sync.WaitGroup, task *Task) {
+	task.lock.Lock()
+	defer task.lock.Unlock()
+	// 判断一下任务状态
+	if task.state != StateStart {
+		return
+	}
+	if task.isRunning == false && task.runFunc != nil {
+		if task.initFunc != nil {
+			task.initFunc()
 		}
-		if task.isRunning == false && task.runFunc != nil {
-			if task.initFunc != nil {
-				task.initFunc()
-			}
-			task.heartbeat = time.Now()
-			wg.Add(1)
-			go func() {
-				defer func() {
-					task.isRunning = false
-					wg.Done()
-				}()
-				task.isRunning = true
-				task.runFunc()
+		task.heartbeat = time.Now()
+		task.isRunning = true
+		wg.Add(1)
+		go func() {
+			defer func() {
+				task.lock.Lock()
+				defer task.lock.Unlock()
+
+				task.isRunning = false
+				wg.Done()
 			}()
-		}
+			task.runFunc()
+		}()
 	}
 }
 

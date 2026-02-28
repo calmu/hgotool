@@ -93,7 +93,13 @@ func TestHbRunStop(t *testing.T) {
 }
 
 func testHbStop(t *testing.T, runStop bool) {
-	ctx, _ := hsignal.ContextSignal(hlog.GetLogger("heartbeat").Warn)
+	ctx, cancel := hsignal.ContextSignal(hlog.GetLogger("heartbeat").Warn)
+
+	// 为了能一次性运行所有test，这里过30s就触发信号退出
+	go func() {
+		time.Sleep(20 * time.Second)
+		cancel()
+	}()
 
 	hb := NewHeartbeat(ctx,
 		WithTickerDuration(time.Second*5),
@@ -103,22 +109,29 @@ func testHbStop(t *testing.T, runStop bool) {
 		WithLogger(hlog.GetLogger("heartbeat")),
 	)
 
-	var task1 *Task
+	var task1, task2 *Task
 
 	task1 = NewTask("task-1", WithInitFunc(func() { t.Log("task-1 init") }), WithRunFunc(func() {
 		defer t.Log("task-1 run end")
 		t.Log("task-1 run")
-		time.Sleep(time.Second * 10)
+		time.Sleep(time.Second * 6)
 		t.Log(task1, time.Now())
 		task1.Heartbeat(hb)
 		// 如果是真运行结束，必须在这里执行心跳stop,避免重复拉起；
 		if runStop {
 			hb.Stop()
 		}
-	}))
-	fmt.Println(task1, 2)
+	}), WithStopFunc(func() { t.Log("task-1 stop") }))
 
-	tg := NewTaskGroup(WithGroupName("test-one1"), WithTaskList(task1))
+	task2 = NewTask("task-2", WithInitFunc(func() { t.Log("task-2 init") }), WithRunFunc(func() {
+		defer t.Log("task-2 run end")
+		t.Log("task-2 run")
+		<-ctx.Done()
+		t.Log(task2, time.Now())
+		task2.Heartbeat(hb)
+	}), WithStopFunc(func() { t.Log("task-2 stop") }))
+
+	tg := NewTaskGroup(WithGroupName("test-one1"), WithTaskList(task1, task2))
 
 	hb.Add(tg)
 
@@ -131,15 +144,19 @@ func testHbStop(t *testing.T, runStop bool) {
 		defer lock.RUnlock()
 
 		t.Log("cache", cacheList)
+	}), hticker.WithDeferFunc(func() {
+		t.Log("ticker cache print defer")
 	}))
 	ticker.Start()
-	wg.Wait()
+	<-ctx.Done()
 	ticker.Stop()
+	hb.Stop()
+	wg.Wait()
 	t.Log("cache", cacheList)
 }
 
 func TestHbStateStop(t *testing.T) {
-	cacheKeyPrefix := "test-one1:task-1:"
+	cacheKeyPrefix := "heartbeat:test-one1:task-1:"
 	stateCacheKey := fmt.Sprintf("%sstate", cacheKeyPrefix)
 	setHeartbeat(stateCacheKey, StateStop)
 	testHbStop(t, false)
@@ -171,7 +188,7 @@ func TestHbStateStop(t *testing.T) {
 }
 
 func TestHbRunAfterStateStop(t *testing.T) {
-	cacheKeyPrefix := "test-one1:task-1:"
+	cacheKeyPrefix := "heartbeat:test-one1:task-1:"
 	stateCacheKey := fmt.Sprintf("%sstate", cacheKeyPrefix)
 	go func() {
 		time.Sleep(time.Second * 5)
@@ -206,7 +223,7 @@ func TestHbRunAfterStateStop(t *testing.T) {
 }
 
 func TestHbStatePause(t *testing.T) {
-	cacheKeyPrefix := "test-one1:task-1:"
+	cacheKeyPrefix := "heartbeat:test-one1:task-1:"
 	stateCacheKey := fmt.Sprintf("%sstate", cacheKeyPrefix)
 	setHeartbeat(stateCacheKey, StatePause)
 	testHbStop(t, false)
@@ -238,7 +255,7 @@ func TestHbStatePause(t *testing.T) {
 }
 
 func TestHbRunAfterStatePause(t *testing.T) {
-	cacheKeyPrefix := "test-one1:task-1:"
+	cacheKeyPrefix := "heartbeat:test-one1:task-1:"
 	stateCacheKey := fmt.Sprintf("%sstate", cacheKeyPrefix)
 	go func() {
 		time.Sleep(time.Second * 5)
@@ -273,7 +290,7 @@ func TestHbRunAfterStatePause(t *testing.T) {
 }
 
 func TestHbRunStartAfterPause(t *testing.T) {
-	cacheKeyPrefix := "test-one1:task-1:"
+	cacheKeyPrefix := "heartbeat:test-one1:task-1:"
 	stateCacheKey := fmt.Sprintf("%sstate", cacheKeyPrefix)
 	setHeartbeat(stateCacheKey, StatePause)
 	go func() {
@@ -309,7 +326,7 @@ func TestHbRunStartAfterPause(t *testing.T) {
 }
 
 func TestHbRunStartAfterStop(t *testing.T) {
-	cacheKeyPrefix := "test-one1:task-1:"
+	cacheKeyPrefix := "heartbeat:test-one1:task-1:"
 	stateCacheKey := fmt.Sprintf("%sstate", cacheKeyPrefix)
 	setHeartbeat(stateCacheKey, StateStop)
 	go func() {

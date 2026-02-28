@@ -101,19 +101,10 @@ func (hb *Heartbeat) Start(wg *sync.WaitGroup) {
 
 	var wgA sync.WaitGroup
 
+	// 先运行一次
 	hb.runGroup(&wgA)
-	syncRunFunc := func() {
-		hb.collect(hbList)
-		hb.syncHeartbeatToCache(hbList)
-	}
-	defer syncRunFunc()
-	syncRunFunc()
-
-	// 监听ctx
-	go func() {
-		<-hb.ctx.Done()
-		hb.Stop()
-	}()
+	hb.collect(hbList)
+	hb.syncHeartbeatToCache(hbList)
 
 	// 等待所有任务组运行,并记录运行状态
 	defer func() {
@@ -126,30 +117,45 @@ func (hb *Heartbeat) Start(wg *sync.WaitGroup) {
 				}
 			}
 		}
+		hb.collect(hbList)
+		hb.syncHeartbeatToCache(hbList)
+		if hb.logger != nil {
+			hb.logger.Info("hb ticker stop return", zap.Any("hbList", hbList))
+		}
 	}()
 
+	var wgB, wgC, wgD sync.WaitGroup
+
+	wgB.Add(1)
 	// 定时读取状态控制启停
 	readTicker := hticker.NewTicker(hb.tickerDuration, hticker.WithTickFunc(func() {
 		if hb.logger != nil {
-			hb.logger.Info("readTicker tick", zap.Any("hbList", hbList))
+			lock.RLock()
+			hbInfo, _ := json.Marshal(hbList)
+			lock.RUnlock()
+			hb.logger.Info("readTicker tick", zap.String("hbList", string(hbInfo)))
 		}
 		hb.runGroup(&wgA)
+	}), hticker.WithDeferFunc(func() {
+		wgB.Done()
 	}))
-	defer readTicker.Stop()
 	readTicker.Start()
 
-	// 定时保存心跳
+	wgC.Add(1)
+	// 定时同步心跳到外部缓存
 	saveTicker := hticker.NewTicker(hb.tickerDuration, hticker.WithTickFunc(func() {
 		lock.RLock()
 		defer lock.RUnlock()
 
 		hb.syncHeartbeatToCache(hbList)
+	}), hticker.WithDeferFunc(func() {
+		wgC.Done()
 	}))
-	defer saveTicker.Stop()
 	saveTicker.Start()
 
+	wgD.Add(1)
 	// 定时监测任务组并收集心跳
-	hb.ticker = hticker.NewTicker(hb.tickerDuration, hticker.WithRunFirst(true), hticker.WithGoroutine(false), hticker.WithTickFunc(func() {
+	hb.ticker = hticker.NewTicker(hb.tickerDuration, hticker.WithRunFirst(true), hticker.WithTickFunc(func() {
 		hb.lock.RLock()
 		defer hb.lock.RUnlock()
 
@@ -157,13 +163,22 @@ func (hb *Heartbeat) Start(wg *sync.WaitGroup) {
 		defer lock.Unlock()
 
 		hb.collect(hbList)
+	}), hticker.WithDeferFunc(func() {
+		wgD.Done()
 	}))
 	hb.ticker.Start()
 
-	if hb.logger != nil {
-		hb.logger.Info("hb ticker stop return", zap.Any("hbList", hbList))
-	}
+	// 监听ctx
+	<-hb.ctx.Done()
 
+	readTicker.Stop()
+	wgB.Wait()
+
+	saveTicker.Stop()
+	wgC.Wait()
+
+	hb.ticker.Stop()
+	wgD.Wait()
 }
 
 func (hb *Heartbeat) buildCacheKey(key string) string {
@@ -172,7 +187,8 @@ func (hb *Heartbeat) buildCacheKey(key string) string {
 
 func (hb *Heartbeat) syncHeartbeatToCache(hbList map[string]*HeartbeatInfo) {
 	if hb.logger != nil {
-		hb.logger.Info("saveTicker tick", zap.Any("hbList", hbList))
+		hbInfo, _ := json.Marshal(hbList)
+		hb.logger.Info("saveTicker tick", zap.String("hbList", string(hbInfo)))
 	}
 
 	for key, val := range hbList {
@@ -183,33 +199,39 @@ func (hb *Heartbeat) syncHeartbeatToCache(hbList map[string]*HeartbeatInfo) {
 
 func (hb *Heartbeat) collect(hbList map[string]*HeartbeatInfo) {
 	if hb.logger != nil {
-		hb.logger.Info("hb.ticker tick", zap.Any("hbList", hbList))
+		hbInfo, _ := json.Marshal(hbList)
+		hb.logger.Info("hb.ticker tick", zap.String("hbList", string(hbInfo)))
 	}
 	for _, tg := range hb.tgs {
 		for _, task := range tg.tasks {
-			key := tg.buildTaskInfoKey(task)
-			if _, ok := hbList[key]; !ok {
-				hbList[key] = &HeartbeatInfo{
-					Key:       key,
-					State:     task.state,
-					CreatedAt: time.Now(),
-				}
-			}
-			if task.isRunning {
-				hbList[key].State = StateStart
-			} else if task.state == StateStop {
-				hbList[key].State = StateStop
-				hbList[key].StopTime = task.stopTime
-			} else if task.state == StatePause {
-				hbList[key].State = StatePause
-				hbList[key].StopTime = task.stopTime
-			}
+			func() {
+				task.lock.RLock()
+				defer task.lock.RUnlock()
 
-			// Update heartbeat if state is not Stop
-			if hbList[key].State != StateStop {
-				hbList[key].Heartbeat = task.heartbeat // Update heartbeat
-			}
-			hbList[key].UpdatedAt = time.Now()
+				key := tg.buildTaskInfoKey(task)
+				if _, ok := hbList[key]; !ok {
+					hbList[key] = &HeartbeatInfo{
+						Key:       key,
+						State:     task.state,
+						CreatedAt: time.Now(),
+					}
+				}
+				if task.isRunning {
+					hbList[key].State = StateStart
+				} else if task.state == StateStop {
+					hbList[key].State = StateStop
+					hbList[key].StopTime = task.stopTime
+				} else if task.state == StatePause {
+					hbList[key].State = StatePause
+					hbList[key].StopTime = task.stopTime
+				}
+
+				// Update heartbeat if state is not Stop
+				if hbList[key].State != StateStop {
+					hbList[key].Heartbeat = task.heartbeat // Update heartbeat
+				}
+				hbList[key].UpdatedAt = time.Now()
+			}()
 		}
 	}
 }
