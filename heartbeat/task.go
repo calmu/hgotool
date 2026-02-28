@@ -9,20 +9,23 @@
 package heartbeat
 
 import (
+	"github.com/calmu/hgotool/hticker"
 	"sync"
 	"time"
 )
 
 type Task struct {
-	name      string
-	initFunc  func()
-	runFunc   func()
-	stopFunc  func()
-	heartbeat time.Time // 心跳时间
-	state     string    // task state, default is StateStart, can be StateStart, StatePause, StateStop
-	isRunning bool      // task is running, default is false
-	stopTime  time.Time // task stop time
-	lock      sync.RWMutex
+	name          string
+	initFunc      func()
+	runFunc       func()
+	stopFunc      func()
+	heartbeat     time.Time // 心跳时间
+	state         string    // task state, default is StateStart, can be StateStart, StatePause, StateStop
+	isRunning     bool      // task is running, default is false
+	stopTime      time.Time // task stop time
+	lock          sync.RWMutex
+	ticker        *hticker.Ticker
+	runTickerFlag bool // 是否让框架逻辑启动Ticker，default is false
 }
 
 type TaskOption func(*Task)
@@ -45,6 +48,12 @@ func WithStopFunc(f func()) TaskOption {
 	}
 }
 
+func WithRunTickerFlag(f bool) TaskOption {
+	return func(tg *Task) {
+		tg.runTickerFlag = f
+	}
+}
+
 func NewTask(name string, options ...TaskOption) *Task {
 	t := &Task{name: name}
 	for _, option := range options {
@@ -53,10 +62,29 @@ func NewTask(name string, options ...TaskOption) *Task {
 	return t
 }
 
-// Heartbeat 上报任务心跳，必须在任务函数中调用，且必须传入父级的 heartbeat 心跳实例来加锁
-func (t *Task) Heartbeat(hb *Heartbeat) {
-	hb.lock.Lock()
-	defer hb.lock.Unlock()
+// Heartbeat 上报任务心跳，必须在任务函数中调用
+func (t *Task) Heartbeat() {
+	t.lock.Lock()
+	defer t.lock.Unlock()
 
 	t.heartbeat = time.Now()
+}
+
+// StartHeartbeat 启动任务心跳定时发送心跳，请在task的实体方法中调用(可以自己启动，也可以让框架启动)
+func (t *Task) StartHeartbeat() {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	if t.ticker != nil {
+		t.ticker.Stop()
+	}
+	t.ticker = hticker.NewTicker(time.Second*10, hticker.WithGoroutine(true), hticker.WithTickFunc(t.Heartbeat))
+	t.ticker.Start()
+}
+
+// StopHeartbeat 停止任务心跳定时发送心跳
+func (t *Task) StopHeartbeat() {
+	if t.ticker != nil {
+		t.ticker.Stop()
+	}
 }
