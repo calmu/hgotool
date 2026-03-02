@@ -93,11 +93,21 @@ func (hb *Heartbeat) Add(tg *TaskGroup) {
 	hb.tgsMap[tg.group] = len(hb.tgs) - 1
 }
 
+type HbInfoList struct {
+	List map[string]*HeartbeatInfo `json:"list"`
+	Lock sync.RWMutex
+}
+
+func NewHbInfoList(l int) *HbInfoList {
+	return &HbInfoList{
+		List: make(map[string]*HeartbeatInfo, l),
+	}
+}
+
 func (hb *Heartbeat) Start(wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	hbList := make(map[string]*HeartbeatInfo, len(hb.tgs)*10)
-	lock := sync.RWMutex{}
+	hbList := NewHbInfoList(len(hb.tgs) * 10)
 
 	var wgA sync.WaitGroup
 
@@ -130,9 +140,9 @@ func (hb *Heartbeat) Start(wg *sync.WaitGroup) {
 	// 定时读取状态控制启停
 	readTicker := hticker.NewTicker(hb.tickerDuration, hticker.WithTickFunc(func() {
 		if hb.logger != nil {
-			lock.RLock()
+			hbList.Lock.RLock()
 			hbInfo, _ := json.Marshal(hbList)
-			lock.RUnlock()
+			hbList.Lock.RUnlock()
 			hb.logger.Info("readTicker tick", zap.String("hbList", string(hbInfo)))
 		}
 		hb.runGroup(&wgA)
@@ -144,8 +154,8 @@ func (hb *Heartbeat) Start(wg *sync.WaitGroup) {
 	wgC.Add(1)
 	// 定时同步心跳到外部缓存
 	saveTicker := hticker.NewTicker(hb.tickerDuration, hticker.WithTickFunc(func() {
-		lock.RLock()
-		defer lock.RUnlock()
+		hbList.Lock.RLock()
+		defer hbList.Lock.RUnlock()
 
 		hb.syncHeartbeatToCache(hbList)
 	}), hticker.WithDeferFunc(func() {
@@ -159,8 +169,8 @@ func (hb *Heartbeat) Start(wg *sync.WaitGroup) {
 		hb.lock.RLock()
 		defer hb.lock.RUnlock()
 
-		lock.Lock()
-		defer lock.Unlock()
+		hbList.Lock.Lock()
+		defer hbList.Lock.Unlock()
 
 		hb.collect(hbList)
 	}), hticker.WithDeferFunc(func() {
@@ -185,22 +195,22 @@ func (hb *Heartbeat) buildCacheKey(key string) string {
 	return hb.cachePrefix + key
 }
 
-func (hb *Heartbeat) syncHeartbeatToCache(hbList map[string]*HeartbeatInfo) {
+func (hb *Heartbeat) syncHeartbeatToCache(hbList *HbInfoList) {
 	if hb.logger != nil {
-		hbInfo, _ := json.Marshal(hbList)
-		hb.logger.Info("saveTicker tick", zap.String("hbList", string(hbInfo)))
+		hbInfo, _ := json.Marshal(hbList.List)
+		hb.logger.Info("saveTicker tick", zap.ByteString("hbList", hbInfo))
 	}
 
-	for key, val := range hbList {
+	for key, val := range hbList.List {
 		valStr, _ := json.Marshal(val)
 		hb.saveHeartbeatFunc(hb.buildCacheKey(key), string(valStr)) // Fixed: Added missing argument
 	}
 }
 
-func (hb *Heartbeat) collect(hbList map[string]*HeartbeatInfo) {
+func (hb *Heartbeat) collect(hbList *HbInfoList) {
 	if hb.logger != nil {
-		hbInfo, _ := json.Marshal(hbList)
-		hb.logger.Info("hb.ticker tick", zap.String("hbList", string(hbInfo)))
+		hbInfo, _ := json.Marshal(hbList.List)
+		hb.logger.Info("hb.ticker tick", zap.ByteString("hbList", hbInfo))
 	}
 	for _, tg := range hb.tgs {
 		for _, task := range tg.tasks {
@@ -209,27 +219,27 @@ func (hb *Heartbeat) collect(hbList map[string]*HeartbeatInfo) {
 				defer task.lock.RUnlock()
 
 				key := tg.buildTaskInfoKey(task)
-				if _, ok := hbList[key]; !ok {
-					hbList[key] = &HeartbeatInfo{
+				if _, ok := hbList.List[key]; !ok {
+					hbList.List[key] = &HeartbeatInfo{
 						Key:       key,
 						State:     task.state,
 						CreatedAt: time.Now(),
 					}
 				}
 				if task.isRunning {
-					hbList[key].State = StateStart
+					hbList.List[key].State = StateStart
 				} else if task.state == StateStop {
-					hbList[key].State = StateStop
-					hbList[key].StopTime = task.stopTime
+					hbList.List[key].State = StateStop
+					hbList.List[key].StopTime = task.stopTime
 				} else if task.state == StatePause {
-					hbList[key].State = StatePause
-					hbList[key].StopTime = task.stopTime
+					hbList.List[key].State = StatePause
+					hbList.List[key].StopTime = task.stopTime
 				}
 
-				if task.heartbeat.After(hbList[key].CreatedAt.Add(-time.Second * 1)) {
-					hbList[key].Heartbeat = task.heartbeat // Update heartbeat
+				if task.heartbeat.After(hbList.List[key].CreatedAt.Add(-time.Second * 1)) {
+					hbList.List[key].Heartbeat = task.heartbeat // Update heartbeat
 				}
-				hbList[key].UpdatedAt = time.Now()
+				hbList.List[key].UpdatedAt = time.Now()
 			}()
 		}
 	}
