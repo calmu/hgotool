@@ -226,8 +226,7 @@ func (hb *Heartbeat) collect(hbList map[string]*HeartbeatInfo) {
 					hbList[key].StopTime = task.stopTime
 				}
 
-				// Update heartbeat if state is not Stop
-				if hbList[key].State != StateStop {
+				if task.heartbeat.After(hbList[key].CreatedAt.Add(-time.Second * 1)) {
 					hbList[key].Heartbeat = task.heartbeat // Update heartbeat
 				}
 				hbList[key].UpdatedAt = time.Now()
