@@ -99,7 +99,21 @@ func (t *Task) StopHeartbeat() {
 func (t *Task) stop(state string) {
 	t.lock.Lock()
 	t.state = state
+	if !t.isRunning {
+		t.lock.Unlock()
+		return
+	}
 	t.lock.Unlock()
+
+	if t.stopFunc != nil {
+		t.stopFunc()
+	}
+}
+
+func (t *Task) runStopFunc() {
+	if !t.isRunning {
+		return
+	}
 
 	if t.stopFunc != nil {
 		t.stopFunc()

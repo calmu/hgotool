@@ -65,6 +65,9 @@ func (tg *TaskGroup) runTask(wg *sync.WaitGroup, task *Task) {
 	defer task.lock.Unlock()
 	// 判断一下任务状态
 	if task.state != StateStart {
+		if task.isRunning {
+			task.runStopFunc()
+		}
 		return
 	}
 	if task.isRunning == false && task.runFunc != nil {
@@ -80,6 +83,7 @@ func (tg *TaskGroup) runTask(wg *sync.WaitGroup, task *Task) {
 				defer task.lock.Unlock()
 
 				task.isRunning = false
+				task.stopTime = time.Now()
 				wg.Done()
 			}()
 			// 如果心跳任务需要定时运行，则启动任务

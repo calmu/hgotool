@@ -76,7 +76,7 @@ func NewHeartbeat(ctx context.Context, options ...Option) *Heartbeat {
 		ctx:            ctx,
 		tgs:            make([]*TaskGroup, 0, 100),
 		tgsMap:         make(map[string]int, 100),
-		tickerDuration: time.Second * 30,
+		tickerDuration: time.Second * 10,
 		cachePrefix:    "heartbeat:",
 	}
 	for _, option := range options {
