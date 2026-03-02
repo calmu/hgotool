@@ -76,7 +76,7 @@ func NewHeartbeat(ctx context.Context, options ...Option) *Heartbeat {
 		ctx:            ctx,
 		tgs:            make([]*TaskGroup, 0, 100),
 		tgsMap:         make(map[string]int, 100),
-		tickerDuration: time.Second * 30,
+		tickerDuration: time.Second * 10,
 		cachePrefix:    "heartbeat:",
 	}
 	for _, option := range options {
@@ -226,8 +226,7 @@ func (hb *Heartbeat) collect(hbList map[string]*HeartbeatInfo) {
 					hbList[key].StopTime = task.stopTime
 				}
 
-				// Update heartbeat if state is not Stop
-				if hbList[key].State != StateStop {
+				if task.heartbeat.After(hbList[key].CreatedAt.Add(-time.Second * 1)) {
 					hbList[key].Heartbeat = task.heartbeat // Update heartbeat
 				}
 				hbList[key].UpdatedAt = time.Now()
@@ -264,15 +263,11 @@ func (hb *Heartbeat) runGroup(wg *sync.WaitGroup) {
 				tg.run(wg)
 			case StatePause, StateStop:
 				tg.state = gStr
-				tg.stop()
+				tg.stop(gStr)
 				continue
 			}
 		}
 	}
-}
-
-func (hb *Heartbeat) Stop() {
-	hb.ticker.Stop()
 }
 
 // HeartbeatInfo task heartbeat info

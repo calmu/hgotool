@@ -25,6 +25,7 @@ type Task struct {
 	stopTime      time.Time // task stop time
 	lock          sync.RWMutex
 	ticker        *hticker.Ticker
+	duration      time.Duration
 	runTickerFlag bool // 是否让框架逻辑启动Ticker，default is false
 }
 
@@ -51,6 +52,12 @@ func WithStopFunc(f func()) TaskOption {
 func WithRunTickerFlag(f bool) TaskOption {
 	return func(tg *Task) {
 		tg.runTickerFlag = f
+	}
+}
+
+func WithTaskDuration(d time.Duration) TaskOption {
+	return func(tg *Task) {
+		tg.duration = d
 	}
 }
 
@@ -86,5 +93,29 @@ func (t *Task) StartHeartbeat() {
 func (t *Task) StopHeartbeat() {
 	if t.ticker != nil {
 		t.ticker.Stop()
+	}
+}
+
+func (t *Task) stop(state string) {
+	t.lock.Lock()
+	t.state = state
+	if !t.isRunning {
+		t.lock.Unlock()
+		return
+	}
+	t.lock.Unlock()
+
+	if t.stopFunc != nil {
+		t.stopFunc()
+	}
+}
+
+func (t *Task) runStopFunc() {
+	if !t.isRunning {
+		return
+	}
+
+	if t.stopFunc != nil {
+		t.stopFunc()
 	}
 }
