@@ -113,26 +113,37 @@ func WithModBase[T any]() Options[T] {
 	}
 }
 
-func (m *MonitorChs[T]) Run(wg *sync.WaitGroup) {
+// Run
+// 因为go1.25开始提供sync.WaitGroup Go(f func())来管理goroutine，所以这里使用hwaitgroup.WaitGroup临时代替sync.WaitGroup解锁Go函数
+// 正确使用例子为:
+// var wg hwaitgroup.WaitGroup
+// chs := make([]chan string, 0, 10)
+//
+//	for i := 0; i < 10; i++ {
+//		chs = append(chs, make(chan string, 100))
+//	}
+//
+// monitor := NewMonitorChs(WithChs("test", chs[:4]), WithDuration[string](time.Second*5))
+// wg.Go(monitor.Start)
+// wg.Wait()
+func (m *MonitorChs[T]) Run() {
 	m.quitCh = make(chan struct{}, 1)
 	ticker := time.NewTicker(m.monitorDuration)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-ticker.C:
-				fields := m.GetMonitorLog()
 
-				// 确保hLog不为nil
-				if fields != nil && m.hLog != nil {
-					m.hLog.Warn("ch len monitor", fields...)
-				}
-			case <-m.quitCh:
-				ticker.Stop()
-				return
+	for {
+		select {
+		case <-ticker.C:
+			fields := m.GetMonitorLog()
+
+			// 确保hLog不为nil
+			if fields != nil && m.hLog != nil {
+				m.hLog.Warn("ch len monitor", fields...)
 			}
+		case <-m.quitCh:
+			ticker.Stop()
+			return
 		}
-	}()
+	}
 }
 
 func (m *MonitorChs[T]) Stop() {

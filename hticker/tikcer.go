@@ -89,7 +89,7 @@ func (t *Ticker) start() {
 
 func NewTicker(d time.Duration, options ...Option) *Ticker {
 	t := time.NewTicker(d)
-	ticker := &Ticker{Ticker: t, Quit: make(chan struct{}, 1), isGoroutine: true, tickFunc: func() {
+	ticker := &Ticker{Ticker: t, Quit: make(chan struct{}, 1), tickFunc: func() {
 		fmt.Println("tick")
 	}}
 	for _, option := range options {

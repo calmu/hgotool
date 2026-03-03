@@ -10,7 +10,7 @@ package monitorchs
 
 import (
 	"github.com/calmu/hgotool/hlog"
-	"sync"
+	"github.com/calmu/hgotool/hwaitgroup"
 	"testing"
 	"time"
 )
@@ -63,9 +63,8 @@ func TestMonitorChsGroup(t *testing.T) {
 		WithGroupCh("int", NewMonitorChs[int](WithChs("int", intChs))),
 		WithGroupDuration(time.Second*5),
 	)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	monitorChsGroup.Start(&wg)
+	var wg hwaitgroup.WaitGroup
+	wg.Go(monitorChsGroup.Start)
 
 	time.Sleep(time.Second * 15)
 	monitorChsGroup.Stop()
@@ -120,9 +119,8 @@ func TestMonitorChsGroupWithStruct(t *testing.T) {
 		WithGroupDuration(time.Second*5),
 	)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	monitorChsGroup.Start(&wg)
+	var wg hwaitgroup.WaitGroup
+	wg.Go(monitorChsGroup.Start)
 
 	for i := 0; i < 10; i++ {
 		select {
