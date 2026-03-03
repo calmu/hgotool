@@ -14,6 +14,7 @@ import (
 	"github.com/calmu/hgotool/hlog"
 	"github.com/calmu/hgotool/hsignal"
 	"github.com/calmu/hgotool/hticker"
+	"github.com/calmu/hgotool/hwaitgroup"
 	"github.com/redis/go-redis/v9"
 	"strings"
 	"sync"
@@ -141,9 +142,8 @@ func testHbStop(t *testing.T, runStop bool) {
 
 	hb.Add(tg)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go hb.Start(&wg)
+	var wg hwaitgroup.WaitGroup
+	wg.Go(hb.Start)
 
 	ticker := hticker.NewTicker(time.Second*5, hticker.WithTickFunc(func() {
 		lock.RLock()
@@ -153,7 +153,7 @@ func testHbStop(t *testing.T, runStop bool) {
 	}), hticker.WithDeferFunc(func() {
 		t.Log("ticker cache print defer")
 	}))
-	ticker.Start()
+	wg.Go(ticker.Start)
 	<-ctx.Done()
 	ticker.Stop()
 	wg.Wait()

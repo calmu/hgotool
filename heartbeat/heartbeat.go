@@ -14,6 +14,7 @@ import (
 	"errors"
 	"github.com/calmu/hgotool/hlog"
 	"github.com/calmu/hgotool/hticker"
+	"github.com/calmu/hgotool/hwaitgroup"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 	"sync"
@@ -104,12 +105,17 @@ func NewHbInfoList(l int) *HbInfoList {
 	}
 }
 
-func (hb *Heartbeat) Start(wg *sync.WaitGroup) {
-	defer wg.Done()
-
+// Start
+// 因为go1.25开始提供sync.WaitGroup Go(f func())来管理goroutine，所以这里使用hwaitgroup.WaitGroup临时代替sync.WaitGroup解锁Go函数
+// 正确使用例子为:
+// var wg hwaitgroup.WaitGroup
+// hb := heartbeat.NewHeartbeat(context.Background(), ...)
+// wg.Go(hb.Start)
+// wg.Wait()
+func (hb *Heartbeat) Start() {
 	hbList := NewHbInfoList(len(hb.tgs) * 10)
 
-	var wgA sync.WaitGroup
+	var wgA hwaitgroup.WaitGroup
 
 	// 先运行一次
 	hb.runGroup(&wgA)
@@ -134,9 +140,8 @@ func (hb *Heartbeat) Start(wg *sync.WaitGroup) {
 		}
 	}()
 
-	var wgB, wgC, wgD sync.WaitGroup
+	var wg hwaitgroup.WaitGroup
 
-	wgB.Add(1)
 	// 定时读取状态控制启停
 	readTicker := hticker.NewTicker(hb.tickerDuration, hticker.WithTickFunc(func() {
 		if hb.logger != nil {
@@ -146,24 +151,18 @@ func (hb *Heartbeat) Start(wg *sync.WaitGroup) {
 			hb.logger.Info("readTicker tick", zap.String("hbList", string(hbInfo)))
 		}
 		hb.runGroup(&wgA)
-	}), hticker.WithDeferFunc(func() {
-		wgB.Done()
 	}))
-	readTicker.Start()
+	wg.Go(readTicker.Start)
 
-	wgC.Add(1)
 	// 定时同步心跳到外部缓存
 	saveTicker := hticker.NewTicker(hb.tickerDuration, hticker.WithTickFunc(func() {
 		hbList.Lock.RLock()
 		defer hbList.Lock.RUnlock()
 
 		hb.syncHeartbeatToCache(hbList)
-	}), hticker.WithDeferFunc(func() {
-		wgC.Done()
 	}))
-	saveTicker.Start()
+	wg.Go(saveTicker.Start)
 
-	wgD.Add(1)
 	// 定时监测任务组并收集心跳
 	hb.ticker = hticker.NewTicker(hb.tickerDuration, hticker.WithRunFirst(true), hticker.WithTickFunc(func() {
 		hb.lock.RLock()
@@ -173,22 +172,17 @@ func (hb *Heartbeat) Start(wg *sync.WaitGroup) {
 		defer hbList.Lock.Unlock()
 
 		hb.collect(hbList)
-	}), hticker.WithDeferFunc(func() {
-		wgD.Done()
 	}))
-	hb.ticker.Start()
+	wg.Go(hb.ticker.Start)
 
 	// 监听ctx
 	<-hb.ctx.Done()
 
 	readTicker.Stop()
-	wgB.Wait()
-
 	saveTicker.Stop()
-	wgC.Wait()
-
 	hb.ticker.Stop()
-	wgD.Wait()
+
+	wg.Wait()
 }
 
 func (hb *Heartbeat) buildCacheKey(key string) string {
@@ -245,7 +239,7 @@ func (hb *Heartbeat) collect(hbList *HbInfoList) {
 	}
 }
 
-func (hb *Heartbeat) runGroup(wg *sync.WaitGroup) {
+func (hb *Heartbeat) runGroup(wg *hwaitgroup.WaitGroup) {
 	hb.lock.Lock()
 	defer hb.lock.Unlock()
 

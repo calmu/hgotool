@@ -11,9 +11,9 @@ package heartbeat
 import (
 	"errors"
 	"fmt"
+	"github.com/calmu/hgotool/hwaitgroup"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
-	"sync"
 	"time"
 )
 
@@ -50,7 +50,7 @@ func NewTaskGroup(options ...GroupOption) *TaskGroup {
 	return tg
 }
 
-func (tg *TaskGroup) run(wg *sync.WaitGroup) {
+func (tg *TaskGroup) run(wg *hwaitgroup.WaitGroup) {
 	// 判断一下组状态
 	if tg.state != StateStart {
 		return
@@ -60,7 +60,7 @@ func (tg *TaskGroup) run(wg *sync.WaitGroup) {
 	}
 }
 
-func (tg *TaskGroup) runTask(wg *sync.WaitGroup, task *Task) {
+func (tg *TaskGroup) runTask(wg *hwaitgroup.WaitGroup, task *Task) {
 	task.lock.Lock()
 	defer task.lock.Unlock()
 	// 判断一下任务状态
@@ -76,15 +76,13 @@ func (tg *TaskGroup) runTask(wg *sync.WaitGroup, task *Task) {
 		}
 		task.heartbeat = time.Now()
 		task.isRunning = true
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			defer func() {
 				task.lock.Lock()
 				defer task.lock.Unlock()
 
 				task.isRunning = false
 				task.stopTime = time.Now()
-				wg.Done()
 			}()
 			// 如果心跳任务需要定时运行，则启动任务
 			if task.runTickerFlag {
@@ -93,7 +91,7 @@ func (tg *TaskGroup) runTask(wg *sync.WaitGroup, task *Task) {
 				task.StartHeartbeat()
 			}
 			task.runFunc()
-		}()
+		})
 	}
 }
 
