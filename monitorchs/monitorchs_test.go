@@ -10,7 +10,7 @@ package monitorchs
 
 import (
 	"github.com/calmu/hgotool/hlog"
-	"sync"
+	"github.com/calmu/hgotool/hwaitgroup"
 	"testing"
 	"time"
 )
@@ -45,9 +45,8 @@ func TestMonitorChs1(t *testing.T) {
 
 	m := NewMonitorChs(WithChs("test", chs[:4]), WithDuration[string](time.Second*5))
 	m.AddCh("test5", chs[5])
-	var wg sync.WaitGroup
-	wg.Add(1)
-	m.Run(&wg)
+	var wg hwaitgroup.WaitGroup
+	wg.Go(m.Run)
 
 	// 等待一段时间以观察监控效果
 	time.Sleep(time.Second * 6)
@@ -86,9 +85,8 @@ func TestMonitorChsInt(t *testing.T) {
 
 	m := NewMonitorChs(WithChs("intTest", chs), WithDuration[int](time.Second*3))
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	m.Run(&wg)
+	var wg hwaitgroup.WaitGroup
+	wg.Go(m.Run)
 
 	// 等待一段时间以观察监控效果
 	time.Sleep(time.Second * 4)
@@ -131,11 +129,9 @@ func TestMonitorChsMultipleTypes(t *testing.T) {
 	stringMonitor := NewMonitorChs(WithChs("string", stringChs), WithDuration[string](time.Second*5))
 	intMonitor := NewMonitorChs(WithChs("int", intChs), WithDuration[int](time.Second*5))
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	stringMonitor.Run(&wg)
-	intMonitor.Run(&wg)
+	var wg hwaitgroup.WaitGroup
+	wg.Go(stringMonitor.Run)
+	wg.Go(intMonitor.Run)
 
 	time.Sleep(time.Second * 6)
 

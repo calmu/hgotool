@@ -10,12 +10,11 @@ package monitorchs
 
 import (
 	"go.uber.org/zap"
-	"sync"
 )
 
 // MonitorChsInterface 定义监控通道接口
 type MonitorChsInterface interface {
-	Run(wg *sync.WaitGroup)
+	Run()
 	Stop()
 	GetMonitorLog() []zap.Field // 允许被获取监控日志；通常是其他组件使用
 }
