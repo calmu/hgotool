@@ -11,6 +11,7 @@ package counter
 import (
 	"encoding/json"
 	"github.com/calmu/hgotool/hticker"
+	"github.com/calmu/hgotool/hwaitgroup"
 	"math/rand"
 	"testing"
 	"time"
@@ -22,36 +23,36 @@ func TestSingle(t *testing.T) {
 	c.AddSecond(1)
 	c.AddSecond(2)
 
+	var wgA hwaitgroup.WaitGroup
+
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	addTicker := hticker.NewTicker(time.Second, hticker.WithTickFunc(func() {
 		c.AddSecond(uint64(r.Intn(100))) // Intn returns a non-negative pseudo-random int n such that 0 <= n < 100.
 	}))
-	addTicker.Start()
+	wgA.Go(addTicker.Start)
 
 	secondTicker := hticker.NewTicker(time.Second, hticker.WithTickFunc(func() {
 		sec := c.ResetSecond()
 		t.Log("second:", sec)
 		c.AddMinute(sec)
 	}))
-	secondTicker.Start()
+	wgA.Go(secondTicker.Start)
 
 	minuteTicker := hticker.NewTicker(time.Minute, hticker.WithTickFunc(func() {
 		minute := c.ResetMinute()
 		t.Log("minute:", minute)
 		c.AddHour(minute)
 	}))
-	minuteTicker.Start()
+	wgA.Go(minuteTicker.Start)
 
 	time.Sleep(time.Minute)
 
 	addTicker.Stop()
 
 	time.Sleep(time.Second)
-
 	secondTicker.Stop()
-	time.Sleep(time.Second)
 	minuteTicker.Stop()
-	time.Sleep(time.Second)
+	wgA.Wait()
 
 	js, _ := json.Marshal(c)
 	t.Log("final", string(js))
@@ -94,14 +95,15 @@ func TestSub(t *testing.T) {
 		t.Log("counter:", string(js))
 	})))
 
+	var wg hwaitgroup.WaitGroup
 	for _, ticker := range tickerList {
-		ticker.Start()
+		wg.Go(ticker.Start)
 	}
 	time.Sleep(time.Second * 15)
 	for _, ticker := range tickerList {
 		ticker.Stop()
 	}
+	wg.Wait()
 	js, _ := json.Marshal(c)
 	t.Log("final", string(js))
-	time.Sleep(time.Second * 3)
 }
